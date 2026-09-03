@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/setwave-engine",
+    "crates/setwave-mpv",
+    "crates/setwave-core",
+    "crates/setwave-cli",
+    "crates/setwave-ffi",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT"
+
+[workspace.dependencies]
+setwave-engine = { path = "crates/setwave-engine" }
+setwave-mpv = { path = "crates/setwave-mpv" }
+setwave-core = { path = "crates/setwave-core" }
+thiserror = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Iteration speed: line tables are enough for backtraces and cut link time; a
+# lightly optimised dev build keeps the mpv IPC tests and the GUI usable.
+[profile.dev]
+debug = "line-tables-only"
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

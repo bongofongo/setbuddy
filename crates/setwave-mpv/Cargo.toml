@@ -1,0 +1,18 @@
+[package]
+name = "setwave-mpv"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The only crate in the workspace that knows mpv exists. Nothing depends on it
+# except the binary that wires everything together.
+[dependencies]
+setwave-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[features]
+# Integration tests that spawn a real mpv. Off by default so `cargo test` works
+# on a machine without mpv installed.
+integration = []

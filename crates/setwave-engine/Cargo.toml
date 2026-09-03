@@ -1,0 +1,10 @@
+[package]
+name = "setwave-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Deliberately dependency-light: this crate is the contract, not an implementation.
+# Nothing here may know that mpv, AVFoundation, or any other engine exists.
+[dependencies]
+thiserror.workspace = true

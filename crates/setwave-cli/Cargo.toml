@@ -1,0 +1,20 @@
+[package]
+name = "setwave-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "setwave"
+path = "src/main.rs"
+
+[dependencies]
+setwave-core.workspace = true
+setwave-engine.workspace = true
+setwave-mpv.workspace = true
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+
+[features]
+# End-to-end tests that spawn a real mpv.
+integration = []

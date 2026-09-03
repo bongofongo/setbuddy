@@ -1,0 +1,47 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo tree:*)",
+      "Bash(cargo doc:*)",
+      "Bash(swift build:*)",
+      "Bash(swift test:*)",
+      "Bash(scripts/check.sh:*)",
+      "Bash(scripts/build-swift-bindings.sh:*)",
+      "Bash(scripts/build-mac-app.sh:*)",
+      "Bash(scripts/check-swift-bindings.sh:*)",
+      "Bash(scripts/check-mac-app.sh:*)",
+      "Bash(scripts/run-mac-app.sh:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(tmux:*)",
+      "Bash(mpv --version)",
+      "Bash(ffprobe:*)"
+    ],
+    "deny": [
+      "Bash(rm -rf ~:*)",
+      "Read(~/Library/Application Support/Setwave/**)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in *.rs) rustfmt --edition 2021 \"$f\" 2>/dev/null || true;; esac"
+          }
+        ]
+      }
+    ]
+  }
+}

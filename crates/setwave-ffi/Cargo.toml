@@ -1,0 +1,24 @@
+[package]
+name = "setwave-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+# `cdylib` for the app to link against, `lib` so the bindgen binary can see it.
+crate-type = ["cdylib", "staticlib", "lib"]
+name = "setwave_ffi"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+
+[dependencies]
+setwave-core.workspace = true
+setwave-engine.workspace = true
+setwave-mpv.workspace = true
+uniffi = { version = "0.32", features = ["cli"] }
+thiserror.workspace = true
+
+[build-dependencies]
+uniffi = { version = "0.32", features = ["build"] }
