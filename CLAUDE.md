@@ -60,6 +60,21 @@ scripts/run-mac-app.sh   # build Setbuddy.app (debug) and relaunch it.
 cargo run -p setbuddy-cli -- play <file|query>   # drive the same core from a shell.
 ```
 
+Shipping:
+
+```sh
+scripts/build-mac-app.sh universal  # both archs + the CLI in the bundle. Ad-hoc signed
+                                    # unless SETBUDDY_SIGN_IDENTITY names a Developer ID.
+scripts/release-mac.sh [--publish]  # universal -> Developer ID -> notarise -> staple ->
+                                    # zip -> sha256. --publish cuts the GitHub release and,
+                                    # with SETBUDDY_TAP set, updates the cask.
+```
+
+The cask lives in `bongofongo/homebrew-setbuddy`, not here. Users need
+`brew trust bongofongo/setbuddy` before installing — Homebrew reports an
+untrusted third-party tap as an *invalid* cask, which reads like a syntax error.
+Notarisation needs a one-time `xcrun notarytool store-credentials setbuddy`.
+
 Changed only Swift under `apps/mac`? `swift build --package-path apps/mac -Xswiftc -L -Xswiftc target/debug`
 is enough; bindings only change when `setbuddy-ffi` does. Changed `setbuddy-ffi`? Run the
 `swift` tier — the generated API moved.
