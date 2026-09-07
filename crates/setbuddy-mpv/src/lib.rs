@@ -1,7 +1,7 @@
 //! The mpv playback engine.
 //!
 //! This is the only crate in the workspace that knows mpv exists. It satisfies
-//! [`PlaybackEngine`] and is otherwise invisible: `setwave-core`, the CLI, and the
+//! [`PlaybackEngine`] and is otherwise invisible: `setbuddy-core`, the CLI, and the
 //! menu bar app address it purely through that trait.
 //!
 //! Behaviour here is grounded in the M0 spike (`docs/mpv-notes.md`), which
@@ -21,19 +21,24 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use setwave_engine::{
+use setbuddy_engine::{
     EngineCapabilities, EngineError, EngineSnapshot, PlaybackEngine, VideoWindowLayout,
 };
 
 use crate::ipc::{Ipc, IpcError, OBSERVED};
 
 const DISPLAY_NAME: &str = "mpv";
+/// The remedy the UI shows when mpv is absent. Per-platform because the whole
+/// value of the hint is that it can be pasted into a shell.
+#[cfg(target_os = "macos")]
 const INSTALL_HINT: &str = "Install it with `brew install mpv`, then try again.";
+#[cfg(not(target_os = "macos"))]
+const INSTALL_HINT: &str = "Install mpv with your package manager, then try again.";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
 const SOCKET_WAIT: Duration = Duration::from_secs(10);
 
-/// Containers Setwave indexes and hands to mpv. mpv itself plays far more; this
+/// Containers Setbuddy indexes and hands to mpv. mpv itself plays far more; this
 /// list is the honest intersection with what the library scanner recognises.
 const CONTAINERS: &[&str] = &[
     "webm", "mkv", "mp4", "m4v", "mov", "avi", "flv", "ts", "m4a", "mp3", "wav", "flac", "opus",
@@ -112,14 +117,46 @@ fn layout_args(layout: VideoWindowLayout) -> Vec<String> {
     args
 }
 
+/// Options mpv only understands on macOS.
+///
+/// mpv defines platform options at compile time and *aborts on an unknown
+/// one*, so passing these to a Linux build does not degrade — it stops the
+/// engine from starting at all. Kept in one gated list so a non-macOS front
+/// end gets a working mpv, and `spawn_args` reads as one story on both.
+#[cfg(target_os = "macos")]
+const PLATFORM_ARGS: &[&str] = &[
+    // Leave the media keys to the app's MPRemoteCommandCenter, or both
+    // handlers fire and every press toggles twice.
+    "--input-media-keys=no",
+    // Relinquish the macOS Now Playing widget so Setbuddy owns it.
+    "--media-controls=no",
+    // Register as a UIElement: no Dock icon, no Cmd-Tab entry. The video
+    // window still displays normally under this policy.
+    "--macos-app-activation-policy=accessory",
+    "--macos-menu-shortcuts=no",
+    // Chrome-free floating video.
+    "--title-bar=no",
+    "--ontop-level=system",
+    // Fullscreen in place rather than in a Space of its own: the window is
+    // a floating set, not an app the user switched to, and this keeps it
+    // on the screen they are looking at and above everything on it.
+    "--native-fs=no",
+];
+
+#[cfg(not(target_os = "macos"))]
+const PLATFORM_ARGS: &[&str] = &[];
+
 /// Arguments the M0 spike validated. Every one of these is load-bearing; see
 /// `docs/mpv-notes.md` for what breaks without it.
+///
+/// Only options mpv accepts everywhere belong here; anything platform-specific
+/// goes in [`PLATFORM_ARGS`].
 fn spawn_args(socket: &Path, layout: VideoWindowLayout) -> Vec<String> {
     [
         // Never inherit the user's own mpv setup. Their config can carry
         // `save-position-on-quit` (which fights ResumeStore for control of
         // position), a personal `input-ipc-server` path, and Lua scripts that
-        // would execute inside Setwave's player. Discovered the hard way in M0.
+        // would execute inside Setbuddy's player. Discovered the hard way in M0.
         "--no-config",
         "--load-scripts=no",
         // Stay alive with nothing loaded so the process outlives a track change.
@@ -131,26 +168,11 @@ fn spawn_args(socket: &Path, layout: VideoWindowLayout) -> Vec<String> {
         // Hold the last frame at EOF instead of quitting, so `end-file` is
         // observable and the queue decides what happens next.
         "--keep-open=yes",
-        // Leave the media keys to the app's MPRemoteCommandCenter, or both
-        // handlers fire and every press toggles twice.
-        "--input-media-keys=no",
-        // Relinquish the macOS Now Playing widget so Setwave owns it.
-        "--media-controls=no",
-        // Register as a UIElement: no Dock icon, no Cmd-Tab entry. The video
-        // window still displays normally under this policy.
-        "--macos-app-activation-policy=accessory",
-        "--macos-menu-shortcuts=no",
-        // Chrome-free floating video.
-        "--title-bar=no",
         "--border=no",
         "--ontop=yes",
-        "--ontop-level=system",
-        // Fullscreen in place rather than in a Space of its own: the window is
-        // a floating set, not an app the user switched to, and this keeps it
-        // on the screen they are looking at and above everything on it.
-        "--native-fs=no",
     ]
     .iter()
+    .chain(PLATFORM_ARGS.iter())
     .map(|s| s.to_string())
     // Laid out at spawn as well as by property, so the very first pop-out of
     // a fresh process is already where and how large it should be.
@@ -296,7 +318,7 @@ impl Session {
                 }
             },
             // Adopted: there is no child to reap, so wait for mpv to close the
-            // socket instead. Without this, `setwave quit` would return while
+            // socket instead. Without this, `setbuddy quit` would return while
             // mpv was still audibly playing.
             None => {
                 while self.ipc.is_connected() && Instant::now() < deadline {
@@ -314,7 +336,7 @@ enum SocketMode {
     /// A private socket for this engine alone; the process dies with it.
     Ephemeral,
     /// A well-known socket shared across processes. The CLI runs as a series of
-    /// short-lived invocations — `setwave play`, then `setwave pause` a minute
+    /// short-lived invocations — `setbuddy play`, then `setbuddy pause` a minute
     /// later — so the mpv process, not the CLI, is what holds playback state.
     /// An engine in this mode attaches to a running mpv if one is listening and
     /// leaves it running when dropped.
@@ -379,7 +401,7 @@ impl MpvEngine {
     fn unique_socket() -> PathBuf {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("setwave-mpv-{}-{}.sock", std::process::id(), n))
+        std::env::temp_dir().join(format!("setbuddy-mpv-{}-{}.sock", std::process::id(), n))
     }
 
     /// Get a live session, starting or restarting mpv if needed.
@@ -496,7 +518,7 @@ impl MpvEngine {
             .stderr(Stdio::null());
         if matches!(self.mode, SocketMode::Shared(_)) {
             // Detach from the caller's process group so closing the terminal
-            // that ran `setwave play` does not take playback down with it.
+            // that ran `setbuddy play` does not take playback down with it.
             command.process_group(0);
         }
         let child = command.spawn().map_err(|e| match e.kind() {
@@ -926,7 +948,7 @@ impl PlaybackEngine for MpvEngine {
 
         // Polling must never *start* mpv — an idle app stays idle. Adopting one
         // that is already running is a different matter: without this, a fresh
-        // `setwave status` would report "nothing playing" while a set is audibly
+        // `setbuddy status` would report "nothing playing" while a set is audibly
         // playing from an earlier invocation.
         if session.is_none() {
             if let SocketMode::Shared(path) = &self.mode {
@@ -998,5 +1020,116 @@ impl Drop for MpvEngine {
         }
         // A shared engine deliberately leaves mpv playing: the next CLI
         // invocation adopts it. `shutdown` is the only thing that stops it.
+    }
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::*;
+
+    fn args(layout: VideoWindowLayout) -> Vec<String> {
+        spawn_args(Path::new("/tmp/setbuddy-test.sock"), layout)
+    }
+
+    /// Every one of these was added because something broke without it; a
+    /// silent removal is the kind of regression only a user would find.
+    #[test]
+    fn the_load_bearing_options_are_always_passed() {
+        let args = args(VideoWindowLayout::default());
+        for required in [
+            "--no-config",
+            "--load-scripts=no",
+            "--idle=yes",
+            "--no-terminal",
+            "--force-window=no",
+            "--keep-open=yes",
+            "--input-ipc-server=/tmp/setbuddy-test.sock",
+        ] {
+            assert!(
+                args.iter().any(|a| a == required),
+                "missing {required} in {args:?}"
+            );
+        }
+    }
+
+    /// mpv aborts on an option its build does not define, so a platform-only
+    /// option outside `PLATFORM_ARGS` would stop the engine starting there.
+    #[test]
+    fn platform_only_options_never_leak_into_the_portable_set() {
+        let platform: Vec<&str> = PLATFORM_ARGS.to_vec();
+        let args = args(VideoWindowLayout::default());
+        for arg in &args {
+            let is_platform = platform.iter().any(|p| p == arg);
+            assert!(
+                !arg.starts_with("--macos-") || is_platform,
+                "{arg} is macOS-only but is not in PLATFORM_ARGS"
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        assert!(
+            args.iter().all(|a| !a.starts_with("--macos-")),
+            "a non-macOS build must not pass macOS options: {args:?}"
+        );
+    }
+
+    #[test]
+    fn a_layout_becomes_geometry_autofit_and_screen() {
+        let fraction = args(VideoWindowLayout::ScreenFraction(0.4));
+        assert!(
+            fraction.iter().any(|a| a == "--geometry=40%+50%+50%"),
+            "{fraction:?}"
+        );
+        assert!(fraction.iter().any(|a| a == "--fullscreen=no"));
+        assert!(
+            fraction.iter().all(|a| !a.starts_with("--autofit")),
+            "a width alone needs no autofit box"
+        );
+
+        let fill = args(VideoWindowLayout::Fill);
+        assert!(fill.iter().any(|a| a == "--autofit=100%x100%"), "{fill:?}");
+        assert!(
+            fill.iter().any(|a| a == "--geometry=+50%+50%"),
+            "fill positions but does not size"
+        );
+
+        let full = args(VideoWindowLayout::Fullscreen);
+        assert!(full.iter().any(|a| a == "--fullscreen=yes"), "{full:?}");
+
+        let custom = args(VideoWindowLayout::Custom {
+            width: 1280,
+            position: Some((100, 50)),
+            screen: Some(1),
+        });
+        assert!(
+            custom.iter().any(|a| a == "--geometry=1280+100+50"),
+            "{custom:?}"
+        );
+        assert!(custom.iter().any(|a| a == "--screen=1"));
+    }
+
+    /// mpv reads `--geometry=` with nothing after it as an argument error, so
+    /// an unset value must be left out rather than passed empty.
+    #[test]
+    fn empty_layout_values_are_left_out_entirely() {
+        for layout in [
+            VideoWindowLayout::Fullscreen,
+            VideoWindowLayout::Fill,
+            VideoWindowLayout::ScreenFraction(1.0),
+            VideoWindowLayout::Custom {
+                width: 800,
+                position: None,
+                screen: None,
+            },
+        ] {
+            for arg in args(layout) {
+                assert!(!arg.ends_with('='), "empty option {arg} for {layout:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn video_selection_maps_to_mpvs_own_grammar() {
+        assert_eq!(video_selection(true), json!("auto"));
+        assert_eq!(video_selection(false), json!("no"));
     }
 }

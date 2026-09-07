@@ -2,7 +2,7 @@
 //! a real mpv on a shared socket, and the `Player` facade on top.
 //!
 //! ```text
-//! cargo test -p setwave-cli --features integration -- --test-threads=1
+//! cargo test -p setbuddy-cli --features integration -- --test-threads=1
 //! ```
 #![cfg(feature = "integration")]
 
@@ -10,15 +10,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use setwave_core::player::Player;
-use setwave_core::selection::EngineRegistry;
-use setwave_core::store::Store;
-use setwave_engine::{PlaybackEngine, SharedEngine};
-use setwave_mpv::MpvEngine;
+use setbuddy_core::player::Player;
+use setbuddy_core::selection::EngineRegistry;
+use setbuddy_core::store::Store;
+use setbuddy_engine::{PlaybackEngine, SharedEngine};
+use setbuddy_mpv::MpvEngine;
 
 fn asset(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../setwave-mpv/tests/assets")
+        .join("../setbuddy-mpv/tests/assets")
         .join(name)
         .canonicalize()
         .expect("test asset must exist")

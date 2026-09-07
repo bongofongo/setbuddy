@@ -1,5 +1,5 @@
 [package]
-name = "setwave-mpv"
+name = "setbuddy-mpv"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 # The only crate in the workspace that knows mpv exists. Nothing depends on it
 # except the binary that wires everything together.
 [dependencies]
-setwave-engine.workspace = true
+setbuddy-engine.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

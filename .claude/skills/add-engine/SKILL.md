@@ -8,11 +8,11 @@ step below needs more than that, stop and fix the boundary instead.
 
 ## Swift engine (AVFoundation — the MVP one)
 
-1. Read `setwave-engine/src/lib.rs` (the contract) and `tests/swift/main.swift`
-   (`SwiftNullEngine`, the proven shape). Read `apps/mac/Generated/setwave.swift` for the
+1. Read `setbuddy-engine/src/lib.rs` (the contract) and `tests/swift/main.swift`
+   (`SwiftNullEngine`, the proven shape). Read `apps/mac/Generated/setbuddy.swift` for the
    Swift-side `PlaybackEngine` protocol and `EngineCapabilities`/`EngineSnapshot` records.
-2. Create `apps/mac/Sources/SetwaveAV/AVFoundationEngine.swift` as a new SwiftPM target
-   depending on `SetwaveCore`. `final class AVFoundationEngine: PlaybackEngine,
+2. Create `apps/mac/Sources/SetbuddyAV/AVFoundationEngine.swift` as a new SwiftPM target
+   depending on `SetbuddyCore`. `final class AVFoundationEngine: PlaybackEngine,
    @unchecked Sendable`. Own: one `AVPlayer`, one lazily created `NSWindow` hosting an
    `AVPlayerView` (gives native PiP), a lock around state, and a cached snapshot updated
    from `addPeriodicTimeObserver` (never computed on demand: `snapshot()` must not block).
@@ -25,8 +25,8 @@ step below needs more than that, stop and fix the boundary instead.
    FFI). `stop` = `replaceCurrentItem(with: nil)`. `shutdown` = idempotent teardown.
    All AVFoundation calls hop to main via `DispatchQueue.main.async`; the contract call
    returns immediately.
-5. Register: in `PlayerModel` construct via `Setwave.withEngines([AVFoundationEngine()])`
-   instead of `Setwave()`. That is the one line. Engine policy in settings already offers
+5. Register: in `PlayerModel` construct via `Setbuddy.withEngines([AVFoundationEngine()])`
+   instead of `Setbuddy()`. That is the one line. Engine policy in settings already offers
    force-by-id.
 6. Prove it: extend `tests/swift/main.swift` or `PlayerModelTests` so the registry picks
    avfoundation for `tiny.mp3` and mpv for `tiny.webm`, and that `next` across engines
@@ -34,7 +34,7 @@ step below needs more than that, stop and fix the boundary instead.
 
 ## Rust engine
 
-Same contract, in a new `crates/setwave-<name>` depending only on `setwave-engine`.
-Register in `setwave-cli/src/main.rs` and `setwave-ffi` `Setwave::build`. Test with the
-same asset set under `crates/setwave-mpv/tests/assets`, behind an `integration` feature
+Same contract, in a new `crates/setbuddy-<name>` depending only on `setbuddy-engine`.
+Register in `setbuddy-cli/src/main.rs` and `setbuddy-ffi` `Setbuddy::build`. Test with the
+same asset set under `crates/setbuddy-mpv/tests/assets`, behind an `integration` feature
 if it needs real hardware.

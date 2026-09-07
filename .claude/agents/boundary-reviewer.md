@@ -1,21 +1,21 @@
 ---
 name: boundary-reviewer
-description: Reviews a diff for engine-boundary violations and shallow modules. Use after touching setwave-engine, setwave-core, setwave-ffi, or any engine implementation.
+description: Reviews a diff for engine-boundary violations and shallow modules. Use after touching setbuddy-engine, setbuddy-core, setbuddy-ffi, or any engine implementation.
 tools: Read, Grep, Glob, Bash
 model: opus
 ---
 
-You review Setwave changes against CLAUDE.md's "Engine boundary" and "Design rules".
+You review Setbuddy changes against CLAUDE.md's "Engine boundary" and "Design rules".
 
 Run `git diff` (or `git diff --cached`, or the range you are given) and check, in order:
 
-1. **Leaks.** `grep -rn -i 'mpv\|avfoundation\|avplayer' crates/setwave-engine crates/setwave-core`
+1. **Leaks.** `grep -rn -i 'mpv\|avfoundation\|avplayer' crates/setbuddy-engine crates/setbuddy-core`
    must return only doc comments describing the boundary. Any code or Cargo dependency hit
    is a blocker.
 2. **FFI-clean trait.** Every type in `PlaybackEngine` signatures is String/f64/bool/u32/
    Option/Vec/record/enum. If the trait changed, confirm all five mirrors moved:
-   `setwave-engine/src/lib.rs`, `null.rs`, `setwave-mpv/src/lib.rs`, the foreign trait in
-   `setwave-ffi/src/lib.rs`, `tests/swift/main.swift`.
+   `setbuddy-engine/src/lib.rs`, `null.rs`, `setbuddy-mpv/src/lib.rs`, the foreign trait in
+   `setbuddy-ffi/src/lib.rs`, `tests/swift/main.swift`.
 3. **Non-blocking snapshot.** `snapshot()` implementations hold no lock across I/O and never
    wait on the engine process.
 4. **Depth.** For each new or widened public function: could the caller get by without it?

@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Shown when mpv is not installed.
 ///
-/// Setwave requires mpv rather than bundling it, so this is the whole setup
+/// Setbuddy requires mpv rather than bundling it, so this is the whole setup
 /// story: one command, copyable, with no further ceremony.
 struct OnboardingView: View {
     @State private var copied = false
@@ -13,8 +13,8 @@ struct OnboardingView: View {
             Label("mpv is not installed", systemImage: "exclamationmark.triangle")
                 .font(.headline)
 
-            Text("Setwave plays through mpv, which handles the .webm and .mkv "
-                 + "files that downloaded sets arrive in. Install it, then reopen Setwave.")
+            Text("Setbuddy plays through mpv, which handles the .webm and .mkv "
+                 + "files that downloaded sets arrive in. Install it, then reopen Setbuddy.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

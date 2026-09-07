@@ -1,12 +1,9 @@
 import SwiftUI
-import SetwaveCore
+import SetbuddyAV
+import SetbuddyCore
 
 public struct MenuBarView: View {
     @EnvironmentObject private var model: PlayerModel
-
-    /// Listening mode: the artwork takes the whole panel and the transport
-    /// floats over it. Purely a view state — nothing in the engine changes.
-    @State private var listening = false
 
     /// Which list is showing. Owned here rather than in the panel because
     /// staging something has to be able to switch to the queue.
@@ -19,10 +16,10 @@ public struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 0) {
             if !model.engineAvailable {
                 OnboardingView()
-            } else if listening {
-                ListeningView { withAnimation(collapse) { listening = false } }
+            } else if model.isExpanded {
+                ListeningView { withAnimation(collapse) { model.setExpanded(false) } }
             } else {
-                NowPlayingHeader(onExpand: { withAnimation(expand) { listening = true } })
+                NowPlayingHeader(onExpand: { withAnimation(expand) { model.setExpanded(true) } })
                 TransportBar()
                 Divider()
                 BrowserPanel(tab: $tab)
@@ -35,7 +32,7 @@ public struct MenuBarView: View {
         // A track that ends while expanded leaves nothing to look at, so the
         // panel falls back to the list rather than a blank square.
         .onChange(of: model.hasTrack) { _, hasTrack in
-            if !hasTrack { withAnimation(collapse) { listening = false } }
+            if !hasTrack { withAnimation(collapse) { model.setExpanded(false) } }
         }
     }
 
@@ -149,6 +146,7 @@ private struct ArtworkThumbnail: View {
     @EnvironmentObject private var model: PlayerModel
     let onExpand: () -> Void
     @State private var hovering = false
+    @State private var discAngle: Double = 0
 
     var body: some View {
         Group {
@@ -171,9 +169,13 @@ private struct ArtworkThumbnail: View {
             if model.hasTrack && hovering {
                 ZStack {
                     RoundedRectangle(cornerRadius: 6).fill(.black.opacity(0.45))
-                    Image(systemName: "arrow.up.left.and.arrow.down.right")
-                        .font(.callout.weight(.semibold))
-                        .foregroundStyle(.white)
+                    // The record, turning: the same glyph the expanded player
+                    // uses for the set, so the way in and the thing behind it
+                    // are visibly the same object.
+                    Image(systemName: "opticaldisc.fill")
+                        .font(.title2.weight(.light))
+                        .foregroundStyle(.white.opacity(0.95))
+                        .rotationEffect(.degrees(discAngle))
                 }
                 .transition(.opacity)
             }
@@ -184,8 +186,18 @@ private struct ArtworkThumbnail: View {
         )
         .contentShape(RoundedRectangle(cornerRadius: 6))
         .onTapGesture { if model.hasTrack { onExpand() } }
-        .onHover { hovering = $0 }
-        .help(model.hasTrack ? "Listening mode" : "")
+        .onHover { hovering in
+            self.hovering = hovering
+            // Turning only under the pointer: at rest the header is still.
+            if hovering {
+                withAnimation(.linear(duration: 4).repeatForever(autoreverses: false)) {
+                    discAngle = 360
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.3)) { discAngle = 0 }
+            }
+        }
+        .help(model.hasTrack ? (model.panelVideoPossible ? "Play the set" : "Listening mode") : "")
         .animation(.easeOut(duration: 0.18), value: model.artwork)
         .animation(.easeOut(duration: 0.12), value: hovering)
     }
@@ -909,7 +921,7 @@ private struct FooterBar: View {
             Button { model.quit() } label: {
                 Image(systemName: "power")
             }
-            .help("Quit Setwave")
+            .help("Quit Setbuddy")
         }
         .buttonStyle(HoverButtonStyle())
         .font(.callout)
@@ -967,7 +979,17 @@ private struct ListeningView: View {
     @EnvironmentObject private var model: PlayerModel
     let onBack: () -> Void
 
+    /// Whether this view is holding the keyboard. Only then are the on-screen
+    /// controls redundant, so only then are they taken away — a set playing in
+    /// a panel that cannot answer keys must still be pressable.
+    @FocusState private var focused: Bool
+    @State private var showHint = false
+
     private static let height: CGFloat = 420
+
+    /// The set is playing here and the keys reach it: nothing on screen is
+    /// carrying its weight any more.
+    private var keyboardDriven: Bool { model.panelVideoShowing && focused }
 
     var body: some View {
         ZStack {
@@ -983,22 +1005,57 @@ private struct ListeningView: View {
             VStack(spacing: 0) {
                 header
                 Spacer(minLength: 0)
-                if model.snapshot?.hasVideo == true {
+                // Nothing to press when the set plays here: expanding the
+                // player is what summoned it. The disc stays for the window
+                // surface, and for files only mpv can open.
+                if model.snapshot?.hasVideo == true && !model.panelVideoPossible {
                     SetSummonButton()
                 }
                 Spacer(minLength: 0)
-                transport
+                if keyboardDriven {
+                    hint
+                } else {
+                    transport
+                }
             }
             .padding(14)
         }
         .frame(width: 380, height: Self.height)
         .clipped()
+        // The whole view takes the keyboard, not a control inside it: there is
+        // nothing to tab between, and a focus ring over a video is noise.
+        .focusable()
+        .focusEffectDisabled()
+        .focused($focused)
+        .onKeyPress { press in
+            guard let key = PlayerModel.PlayerKey.from(press.key, modifiers: press.modifiers) else {
+                return .ignored
+            }
+            model.perform(key)
+            return .handled
+        }
+        .onAppear { focused = true }
+        .onChange(of: keyboardDriven) { _, driven in
+            guard driven else { return }
+            // Say what the keys are once, then get out of the way.
+            showHint = true
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(3))
+                withAnimation(.easeOut(duration: 0.6)) { showHint = false }
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: keyboardDriven)
         .transition(.opacity.combined(with: .scale(scale: 0.94)))
     }
 
     private var backdrop: some View {
         Group {
-            if let image = model.artwork {
+            if model.panelVideoShowing {
+                // The set itself, playing where the artwork would be. Filled
+                // rather than fitted: this is a backdrop for the transport to
+                // sit on, and the panel is portrait while a set is not.
+                PanelVideo(view: model.panelVideoView())
+            } else if let image = model.artwork {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -1032,6 +1089,20 @@ private struct ListeningView: View {
             .help("Back to the player")
             Spacer()
         }
+    }
+
+    /// What replaces the transport while the keys are live. Fades out on its
+    /// own: the controls are gone, so the first thing to say is how to drive
+    /// it without them.
+    private var hint: some View {
+        Text("Space  play  ·  ← →  30s  ·  ↑ ↓  volume  ·  Esc  back")
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.white.opacity(0.85))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.black.opacity(0.35), in: Capsule())
+            .opacity(showHint ? 1 : 0)
+            .shadow(color: .black.opacity(0.5), radius: 6, y: 1)
     }
 
     private var transport: some View {
@@ -1086,6 +1157,15 @@ private struct SetSummonButton: View {
 
     private var active: Bool { model.snapshot?.videoVisible ?? false }
 
+    /// Says where the set is about to appear, because that now depends on a
+    /// setting and on which engine holds the file.
+    private var helpText: String {
+        if active { return model.panelVideoShowing ? "Send the set away" : "Dismiss the set" }
+        return model.videoSurface == .panel && model.panelVideoSupported
+            ? "Play the set here"
+            : "Summon the set"
+    }
+
     var body: some View {
         Button {
             summon(outward: !active)
@@ -1094,7 +1174,7 @@ private struct SetSummonButton: View {
             core
         }
         .buttonStyle(.plain)
-        .help(active ? "Dismiss the set" : "Summon the set")
+        .help(helpText)
     }
 
     private var core: some View {
@@ -1184,6 +1264,18 @@ private struct SetSummonButton: View {
         let outward: Bool
         let delay: Double
     }
+}
+
+/// The engine's video view, hosted in the panel.
+///
+/// The view is made by the engine and handed over as-is — SwiftUI rebuilds
+/// this struct freely, and rebuilding the player layer with it would tear the
+/// picture down on every redraw.
+private struct PanelVideo: NSViewRepresentable {
+    let view: NSView
+
+    func makeNSView(context: Context) -> NSView { view }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 
 /// One ring of the summon. Animates itself on appear and is discarded by the

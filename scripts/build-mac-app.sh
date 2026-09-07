@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build Setwave.app.
+# Build Setbuddy.app.
 #
 #   scripts/build-mac-app.sh [debug|release]
 #
@@ -10,7 +10,7 @@ set -euo pipefail
 
 PROFILE="${1:-debug}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="$ROOT/target/Setwave.app"
+APP="$ROOT/target/Setbuddy.app"
 
 case "$PROFILE" in
   debug)   SWIFT_FLAGS=() ;;
@@ -24,23 +24,23 @@ swift build --package-path "$ROOT/apps/mac" "${SWIFT_FLAGS[@]}" \
     -Xswiftc -L -Xswiftc "$ROOT/target/$PROFILE" \
     -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 
-BIN="$(swift build --package-path "$ROOT/apps/mac" "${SWIFT_FLAGS[@]}" --show-bin-path)/Setwave"
-DYLIB="$ROOT/target/$PROFILE/libsetwave_ffi.dylib"
+BIN="$(swift build --package-path "$ROOT/apps/mac" "${SWIFT_FLAGS[@]}" --show-bin-path)/Setbuddy"
+DYLIB="$ROOT/target/$PROFILE/libsetbuddy_ffi.dylib"
 
 echo "==> assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/Setwave"
+cp "$BIN" "$APP/Contents/MacOS/Setbuddy"
 cp "$DYLIB" "$APP/Contents/Frameworks/"
 
 # The dylib records an absolute build path as its install name; rewrite both
 # sides to @rpath so the copy inside the bundle is the one that gets loaded.
-install_name_tool -id "@rpath/libsetwave_ffi.dylib" \
-    "$APP/Contents/Frameworks/libsetwave_ffi.dylib"
-OLD_REF="$(otool -L "$APP/Contents/MacOS/Setwave" | awk '/libsetwave_ffi\.dylib/ {print $1; exit}')"
-if [ -n "$OLD_REF" ] && [ "$OLD_REF" != "@rpath/libsetwave_ffi.dylib" ]; then
-    install_name_tool -change "$OLD_REF" "@rpath/libsetwave_ffi.dylib" \
-        "$APP/Contents/MacOS/Setwave"
+install_name_tool -id "@rpath/libsetbuddy_ffi.dylib" \
+    "$APP/Contents/Frameworks/libsetbuddy_ffi.dylib"
+OLD_REF="$(otool -L "$APP/Contents/MacOS/Setbuddy" | awk '/libsetbuddy_ffi\.dylib/ {print $1; exit}')"
+if [ -n "$OLD_REF" ] && [ "$OLD_REF" != "@rpath/libsetbuddy_ffi.dylib" ]; then
+    install_name_tool -change "$OLD_REF" "@rpath/libsetbuddy_ffi.dylib" \
+        "$APP/Contents/MacOS/Setbuddy"
 fi
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
@@ -48,10 +48,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>            <string>Setwave</string>
-    <key>CFBundleDisplayName</key>     <string>Setwave</string>
-    <key>CFBundleIdentifier</key>      <string>com.toadmountain.setwave</string>
-    <key>CFBundleExecutable</key>      <string>Setwave</string>
+    <key>CFBundleName</key>            <string>Setbuddy</string>
+    <key>CFBundleDisplayName</key>     <string>Setbuddy</string>
+    <key>CFBundleIdentifier</key>      <string>com.toadmountain.setbuddy</string>
+    <key>CFBundleExecutable</key>      <string>Setbuddy</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
     <key>CFBundleShortVersionString</key> <string>0.1.0</string>
     <key>CFBundleVersion</key>         <string>1</string>

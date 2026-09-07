@@ -1,5 +1,6 @@
 import SwiftUI
-import SetwaveCore
+import SetbuddyAV
+import SetbuddyCore
 
 /// Watched folders, the pop-out's size, and engine choice.
 ///
@@ -9,6 +10,7 @@ struct SettingsPanel: View {
     @EnvironmentObject private var model: PlayerModel
     @Environment(\.dismiss) private var dismiss
     @State private var policy: String = "auto"
+    @State private var surface: VideoSurface = .window
 
     /// The layout picker's presets. The tag is the core's settings form, so a
     /// saved value that matches one selects it and any other shows as custom.
@@ -33,21 +35,53 @@ struct SettingsPanel: View {
         VStack(alignment: .leading, spacing: 14) {
             folders
             Divider()
-            videoWindow
+            videoSurface
+            if model.videoWindowSettingsApply {
+                videoWindow
+            }
             Divider()
             engine
         }
         .padding(16)
         .frame(width: 340)
         .onAppear {
-            policy = currentPolicy
+            policy = model.enginePolicy
+            surface = model.videoSurface
             loadLayoutChoice()
+        }
+    }
+
+    /// Where the set appears. Only shown when an engine that can draw inside
+    /// this app is registered — with mpv alone there is nothing to choose.
+    @ViewBuilder private var videoSurface: some View {
+        if model.panelVideoSupported {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Where the set plays")
+                    .font(.caption.weight(.semibold))
+
+                Picker("", selection: $surface) {
+                    Text("In its own window").tag(VideoSurface.window)
+                    Text("Behind the player").tag(VideoSurface.panel)
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+                .onChange(of: surface) { _, new in model.setVideoSurface(new) }
+
+                Text(surface == .panel
+                     ? "Sets play as the backdrop of the expanded player. Files that need mpv — webm, mkv, opus, flac — still open their own window."
+                     : "Sets open in a floating window, sized below.")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .onChange(of: model.videoSurface) { _, new in surface = new }
         }
     }
 
     private var videoWindow: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Video window")
+            Text(model.videoSurface == .panel ? "Video window (files that need \(fallbackName))" : "Video window")
                 .font(.caption.weight(.semibold))
 
             Picker("", selection: $layoutChoice) {
@@ -82,13 +116,18 @@ struct SettingsPanel: View {
 
     private var customFields: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Button {
-                model.beginWindowPlacement()
-            } label: {
-                Label("Place the window visually…", systemImage: "macwindow.on.rectangle")
+            // Placing means dragging a real window around, and the host finds
+            // that window by the pid that owns it — so only an engine with a
+            // process of its own can offer it.
+            if model.windowPlacementPossible {
+                Button {
+                    model.beginWindowPlacement()
+                } label: {
+                    Label("Place the window visually…", systemImage: "macwindow.on.rectangle")
+                }
+                .controlSize(.small)
+                .disabled(placing)
             }
-            .controlSize(.small)
-            .disabled(placing)
 
             Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 6) {
                     GridRow {
@@ -132,6 +171,12 @@ struct SettingsPanel: View {
 
     private var screenNames: [String] { WindowPlacement.screenNames }
 
+    /// Named rather than listed: with the panel chosen, this section only
+    /// governs the engine that still has to use a window of its own.
+    private var fallbackName: String {
+        model.outOfProcessEngines.first?.displayName ?? "another engine"
+    }
+
     private var hint: String {
         switch layoutChoice {
         case "fullscreen":
@@ -141,6 +186,10 @@ struct SettingsPanel: View {
         default:
             return "Applies the next time the set is summoned. Height follows the video. Sizes are in screen pixels."
         }
+    }
+
+    private func engineName(_ id: String) -> String {
+        model.engines.first { $0.id == id }?.displayName ?? id
     }
 
     /// Width alone when the position fields are blank, so a custom size can
@@ -231,8 +280,8 @@ struct SettingsPanel: View {
 
             Picker("", selection: $policy) {
                 Text("Automatic").tag("auto")
-                ForEach(model.engineIds, id: \.self) { id in
-                    Text(id).tag(id)
+                ForEach(model.engines, id: \.id) { engine in
+                    Text(engine.displayName).tag(engine.id)
                 }
             }
             .labelsHidden()
@@ -241,20 +290,15 @@ struct SettingsPanel: View {
             .onChange(of: policy) { _, new in
                 model.setEnginePolicy(new)
             }
+            .onChange(of: model.enginePolicy) { _, saved in policy = saved }
 
             Text(policy == "auto"
                  ? "Picks the first engine that can open each file."
-                 : "Always uses \(policy). Files it cannot open will report an error rather than falling back.")
+                 : "Always uses \(engineName(policy)). Files it cannot open will report an error rather than falling back.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private var currentPolicy: String {
-        // The snapshot reports the engine that is actually playing, which is the
-        // best available hint when nothing has been forced.
-        model.snapshot?.engineId.map { _ in "auto" } ?? "auto"
     }
 
     private func addFolder() {

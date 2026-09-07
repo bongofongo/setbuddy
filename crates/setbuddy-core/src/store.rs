@@ -2,7 +2,7 @@
 //! queue.
 //!
 //! The queue lives here rather than only in memory because the CLI is a series
-//! of short-lived processes — `setwave queue add`, then `setwave next` a minute
+//! of short-lived processes — `setbuddy queue add`, then `setbuddy next` a minute
 //! later — and both must see the same queue.
 
 use std::path::Path;
@@ -201,7 +201,7 @@ impl Store {
 
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<Track>> {
         let conn = self.conn();
-        let like = format!("%{}%", query.trim().replace('%', "\\%"));
+        let like = format!("%{}%", like_literal(query.trim()));
         let mut stmt = conn.prepare(&format!(
             r#"SELECT {TRACK_COLUMNS} FROM tracks
                WHERE path LIKE ?1 ESCAPE '\' OR title LIKE ?1 ESCAPE '\'
@@ -232,15 +232,7 @@ impl Store {
     pub fn tracks_under(&self, folder: &str) -> Result<Vec<Track>> {
         let conn = self.conn();
         let trimmed = folder.trim_end_matches('/');
-        // Both LIKE wildcards are escaped: a folder called `100%_sets` must not
-        // match everything on disk.
-        let prefix = format!(
-            "{}/%",
-            trimmed
-                .replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_")
-        );
+        let prefix = format!("{}/%", like_literal(trimmed));
         let mut stmt = conn.prepare(&format!(
             r#"SELECT {TRACK_COLUMNS} FROM tracks
                WHERE path LIKE ?1 ESCAPE '\' ORDER BY path"#
@@ -348,24 +340,58 @@ impl Store {
 
     // ---- queue -----------------------------------------------------------
 
+    /// Persist the queue and which row is playing.
+    ///
+    /// Ids with no track behind them are skipped rather than written. They
+    /// would violate the foreign key and fail the whole save — and the id of a
+    /// track that a scan has just forgotten is exactly the kind of thing a
+    /// caller can be holding. Positions stay contiguous and `current` follows
+    /// its row, so a queue saved through here always loads back consistent.
+    /// Callers that need their own copy pruned too use
+    /// [`crate::player::Player::prune_missing_tracks`].
     pub fn save_queue(&self, items: &[i64], current: Option<usize>) -> Result<()> {
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM queue_items", [])?;
+        let mut written = 0usize;
+        let mut current_position = None;
         {
-            let mut stmt =
+            let mut known = tx.prepare("SELECT 1 FROM tracks WHERE id = ?1")?;
+            let mut insert =
                 tx.prepare("INSERT INTO queue_items (position, track_id) VALUES (?1, ?2)")?;
             for (i, track_id) in items.iter().enumerate() {
-                stmt.execute(params![i as i64, track_id])?;
+                if !known.exists(params![track_id])? {
+                    continue;
+                }
+                if current == Some(i) {
+                    current_position = Some(written);
+                }
+                insert.execute(params![written as i64, track_id])?;
+                written += 1;
             }
         }
         tx.execute(
             "INSERT INTO settings (key, value) VALUES ('queue_index', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![current.map(|c| c.to_string()).unwrap_or_default()],
+            params![current_position
+                .map(|c: usize| c.to_string())
+                .unwrap_or_default()],
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Which of `ids` still have a track behind them.
+    pub fn existing_track_ids(&self, ids: &[i64]) -> Result<std::collections::HashSet<i64>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare("SELECT 1 FROM tracks WHERE id = ?1")?;
+        let mut alive = std::collections::HashSet::with_capacity(ids.len());
+        for id in ids {
+            if stmt.exists(params![id])? {
+                alive.insert(*id);
+            }
+        }
+        Ok(alive)
     }
 
     pub fn load_queue(&self) -> Result<(Vec<i64>, Option<usize>)> {
@@ -408,6 +434,19 @@ impl Store {
         )?;
         Ok(())
     }
+}
+
+/// Escape a user string for use inside a `LIKE ... ESCAPE '\\'` pattern.
+///
+/// All three of `\\`, `%` and `_` must be escaped, and the backslash first or
+/// the escapes would themselves be escaped. Missing any one of them is a
+/// correctness bug, not a cosmetic one: an unescaped `_` in "Boiler_Room"
+/// matches any character, an unescaped `%` in "100% Silk" matches the whole
+/// library, and a trailing `\\` leaves a dangling escape in the pattern.
+fn like_literal(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 const TRACK_COLUMNS: &str = "id, path, size_bytes, mtime, title, artist, album, \

@@ -1,8 +1,8 @@
-//! Setwave's cross-platform core: library index, queue, resume, and the player
+//! Setbuddy's cross-platform core: library index, queue, resume, and the player
 //! facade that the CLI and the macOS app both drive.
 //!
 //! Nothing here knows which playback engine is in use. Everything routes through
-//! the [`setwave_engine::PlaybackEngine`] contract, selected per file by
+//! the [`setbuddy_engine::PlaybackEngine`] contract, selected per file by
 //! [`selection::EngineRegistry`].
 
 pub mod artwork;

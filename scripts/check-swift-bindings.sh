@@ -16,10 +16,10 @@ mkdir -p "$BUILD"
 echo "==> compiling Swift check"
 swiftc \
     -swift-version 5 \
-    -Xcc -fmodule-map-file="$GEN/setwaveFFI.modulemap" \
+    -Xcc -fmodule-map-file="$GEN/setbuddyFFI.modulemap" \
     -I "$GEN" \
-    -L "$ROOT/target/debug" -lsetwave_ffi \
-    "$GEN/setwave.swift" \
+    -L "$ROOT/target/debug" -lsetbuddy_ffi \
+    "$GEN/setbuddy.swift" \
     "$ROOT/tests/swift/main.swift" \
     -o "$BUILD/foreign-engine-check"
 
@@ -27,6 +27,6 @@ echo "==> running"
 # Isolated state so the check never touches a real library or a running mpv.
 STATE="$BUILD/state"
 rm -rf "$STATE"
-SETWAVE_STATE_DIR="$STATE" \
+SETBUDDY_STATE_DIR="$STATE" \
 DYLD_LIBRARY_PATH="$ROOT/target/debug" \
-    "$BUILD/foreign-engine-check" "$ROOT/crates/setwave-mpv/tests/assets"
+    "$BUILD/foreign-engine-check" "$ROOT/crates/setbuddy-mpv/tests/assets"

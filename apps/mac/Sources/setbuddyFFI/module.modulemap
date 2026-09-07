@@ -1,7 +1,7 @@
 // Bridges the UniFFI-generated C header into SwiftPM. The generated
-// `setwave.swift` does `import setwaveFFI`, so this module must carry that name.
+// `setbuddy.swift` does `import setbuddyFFI`, so this module must carry that name.
 // Regenerate the header with scripts/build-swift-bindings.sh.
-module setwaveFFI {
-    header "../../Generated/setwaveFFI.h"
+module setbuddyFFI {
+    header "../../Generated/setbuddyFFI.h"
     export *
 }

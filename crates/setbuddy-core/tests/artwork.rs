@@ -6,8 +6,8 @@
 
 use std::path::{Path, PathBuf};
 
-use setwave_core::artwork::{artwork_for, cache_dir};
-use setwave_core::track::Track;
+use setbuddy_core::artwork::{artwork_for, cache_dir};
+use setbuddy_core::track::Track;
 
 fn ffmpeg_available() -> bool {
     std::env::var_os("PATH")
@@ -17,7 +17,7 @@ fn ffmpeg_available() -> bool {
 
 fn asset(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../setwave-mpv/tests/assets")
+        .join("../setbuddy-mpv/tests/assets")
         .join(name)
         .canonicalize()
         .expect("fixture must exist")
@@ -29,9 +29,9 @@ fn use_temp_state_dir() {
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
         let dir =
-            std::env::temp_dir().join(format!("setwave-artwork-tests-{}", std::process::id()));
+            std::env::temp_dir().join(format!("setbuddy-artwork-tests-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("SETWAVE_STATE_DIR", &dir);
+        std::env::set_var("SETBUDDY_STATE_DIR", &dir);
     });
 }
 

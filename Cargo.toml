@@ -1,23 +1,23 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/setwave-engine",
-    "crates/setwave-mpv",
-    "crates/setwave-core",
-    "crates/setwave-cli",
-    "crates/setwave-ffi",
+    "crates/setbuddy-engine",
+    "crates/setbuddy-mpv",
+    "crates/setbuddy-core",
+    "crates/setbuddy-cli",
+    "crates/setbuddy-ffi",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.77"
-license = "MIT"
+license = "Apache-2.0"
 
 [workspace.dependencies]
-setwave-engine = { path = "crates/setwave-engine" }
-setwave-mpv = { path = "crates/setwave-mpv" }
-setwave-core = { path = "crates/setwave-core" }
+setbuddy-engine = { path = "crates/setbuddy-engine" }
+setbuddy-mpv = { path = "crates/setbuddy-mpv" }
+setbuddy-core = { path = "crates/setbuddy-core" }
 thiserror = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

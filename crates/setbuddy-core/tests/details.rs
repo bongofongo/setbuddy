@@ -2,11 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use setwave_core::probe::{details, ffprobe_available};
+use setbuddy_core::probe::{details, ffprobe_available};
 
 fn asset(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../setwave-mpv/tests/assets")
+        .join("../setbuddy-mpv/tests/assets")
         .join(name)
         .canonicalize()
         .expect("fixture must exist")

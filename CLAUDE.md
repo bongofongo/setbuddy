@@ -1,4 +1,4 @@
-# Setwave
+# Setbuddy
 
 macOS menu-bar player for downloaded DJ sets and music (yt-dlp webm/mkv, mp3, flac…).
 Rust core + Swift GUI. Playback goes through a pluggable engine: mpv today, AVFoundation
@@ -16,31 +16,36 @@ next. Both must coexist in the MVP, selected per file by capability.
 
 | Path | Role | May depend on |
 |---|---|---|
-| `crates/setwave-engine` | The playback contract: `PlaybackEngine` trait, records, `NullEngine`. | `thiserror` only |
-| `crates/setwave-mpv` | The only code that knows mpv exists. JSON IPC over a socket. | engine |
-| `crates/setwave-core` | Library index (SQLite), queue, resume, `EngineRegistry`, `Player` facade. | engine |
-| `crates/setwave-cli` | `setwave` binary. Short-lived; adopts the running mpv. | core, engine, mpv |
-| `crates/setwave-ffi` | All UniFFI. Exports `Setwave` object + `PlaybackEngine` foreign trait. | core, engine, mpv |
-| `apps/mac` | SwiftPM. `SetwaveUI` (model + views, testable) and `Setwave` (the `@main`). | generated bindings |
+| `crates/setbuddy-engine` | The playback contract: `PlaybackEngine` trait, records, `NullEngine`. | `thiserror` only |
+| `crates/setbuddy-mpv` | The only code that knows mpv exists. JSON IPC over a socket. | engine |
+| `crates/setbuddy-core` | Library index (SQLite), queue, resume, `EngineRegistry`, `Player` facade. | engine |
+| `crates/setbuddy-cli` | `setbuddy` binary. Short-lived; adopts the running mpv. | core, engine, mpv |
+| `crates/setbuddy-ffi` | All UniFFI. Exports `Setbuddy` object + `PlaybackEngine` foreign trait. | core, engine, mpv |
+| `apps/mac` | SwiftPM. `SetbuddyAV` (the AVFoundation engine), `SetbuddyUI` (model + views, testable) and `Setbuddy` (the `@main`). | generated bindings |
 | `scripts/` | Build, bindings, checks. Each is a single deep entry point. | |
 | `docs/` | Local notes, git-ignored. `session-log.md` gets one entry per session. | |
 
 ## Engine boundary — hard invariants
 
-- `setwave-engine` and `setwave-core` never name a backend. No `mpv`, `AVFoundation`,
+- `setbuddy-engine` and `setbuddy-core` never name a backend. No `mpv`, `AVFoundation`,
   `AVPlayer` in code or `Cargo.toml`. Selection asks `EngineCapabilities`, never identity.
 - Every type crossing `PlaybackEngine` stays UniFFI-representable: `String`, `f64`, `bool`,
   `u32`, `Option`, `Vec`, plain records, enums. No `Path`, no lifetimes, no generics.
-- `setwave-ffi` mirrors the trait `with_foreign`; a Swift engine is wrapped by
-  `ForeignEngine` and registered ahead of mpv via `Setwave::with_engines`.
+- `setbuddy-ffi` mirrors the trait `with_foreign`; a Swift engine is wrapped by
+  `ForeignEngine` and registered ahead of mpv via `Setbuddy::with_engines`.
   `tests/swift/main.swift` proves the direction. Changing the trait means: engine crate,
-  `NullEngine`, `setwave-mpv`, the FFI mirror, the Swift check, in that order.
+  `NullEngine`, `setbuddy-mpv`, the FFI mirror, the Swift check, in that order.
 - `snapshot()` never blocks on the engine; return last-known state.
 - mpv is always spawned `--no-config --load-scripts=no` with every option explicit
   (user config once hijacked resume and the IPC socket). Canonical args live in
-  `setwave-mpv/src/lib.rs`, not in docs.
+  `setbuddy-mpv/src/lib.rs`, not in docs.
 - Adding an engine touches: one new module implementing the trait, plus one line of
   registration. If it touches more, the boundary is wrong; fix the boundary, not the caller.
+- Something only an in-process engine can do — the panel video surface, where AVFoundation
+  hands the app a view to draw the set into — stays a Swift-to-Swift API on that engine
+  (`AVFoundationEngine.setVideoSurface` / `panelVideoView`). It never enters
+  `PlaybackEngine`, which would force mpv to fake a capability it cannot have. `PlayerModel`
+  holds the engine it registers, so it can ask; core, CLI and the contract stay unaware.
 
 ## Commands
 
@@ -51,15 +56,15 @@ scripts/check.sh fast    # cargo check (all targets) + core/engine tests. No mpv
 scripts/check.sh rust    # + mpv/cli integration tests against a real mpv, isolated state dir.
 scripts/check.sh swift   # + regenerate bindings, swift build, swift test, foreign-engine check.
 scripts/check.sh all     # everything above.
-scripts/run-mac-app.sh   # build Setwave.app (debug) and relaunch it.
-cargo run -p setwave-cli -- play <file|query>   # drive the same core from a shell.
+scripts/run-mac-app.sh   # build Setbuddy.app (debug) and relaunch it.
+cargo run -p setbuddy-cli -- play <file|query>   # drive the same core from a shell.
 ```
 
 Changed only Swift under `apps/mac`? `swift build --package-path apps/mac -Xswiftc -L -Xswiftc target/debug`
-is enough; bindings only change when `setwave-ffi` does. Changed `setwave-ffi`? Run the
+is enough; bindings only change when `setbuddy-ffi` does. Changed `setbuddy-ffi`? Run the
 `swift` tier — the generated API moved.
 
-State lives in `~/Library/Application Support/Setwave` unless `SETWAVE_STATE_DIR` is set.
+State lives in `~/Library/Application Support/Setbuddy` unless `SETBUDDY_STATE_DIR` is set.
 Tests and scripts always set it; never let a test touch the real library.
 
 ## Design rules
@@ -67,13 +72,13 @@ Tests and scripts always set it; never let a test touch the real library.
 - **Deep modules.** A module earns its existence by hiding something hard behind a small
   surface: `MpvEngine` hides a process, a socket, timeouts and reconnects behind ten
   methods. Do not add a module that is mostly pass-through.
-- **One facade per layer.** GUI and CLI talk to `Player` (Rust) / `Setwave` (FFI). Views
+- **One facade per layer.** GUI and CLI talk to `Player` (Rust) / `Setbuddy` (FFI). Views
   talk to `PlayerModel`. Views never touch FFI types directly.
 - **Pull complexity downward.** If the caller has to know an ordering, a unit, a retry, or
   a special case, move it into the callee. The FFI layer converts units and shapes once;
   Swift gets values it can display without arithmetic.
 - **Errors are information, not control flow.** Define errors where they are meaningful
-  (`EngineError`, `CoreError`); the FFI flattens them once into `SetwaveError`. Don't
+  (`EngineError`, `CoreError`); the FFI flattens them once into `SetbuddyError`. Don't
   invent new error types for one call site.
 - **Comments state what the code cannot:** why, invariants, measured facts. Every non-
   obvious decision has one line saying what it costs to reverse.
@@ -111,8 +116,10 @@ Tests and scripts always set it; never let a test touch the real library.
 
 ## Roadmap to MVP
 
-1. AVFoundation engine as a Swift `PlaybackEngine` in `apps/mac/Sources/SetwaveAV`
-   (`AVPlayer` + an `NSWindow` for video; `native_pip: true`). Registered ahead of mpv,
-   claiming mp3/m4a/mp4/mov/aac/wav/aiff; mpv keeps webm/mkv/opus/flac and anything else.
-2. Engine policy UI: auto / force mpv / force AVFoundation, already in the store.
+1. ~~AVFoundation engine~~ — done. `apps/mac/Sources/SetbuddyAV`, registered ahead of mpv
+   by `PlayerModel`, claiming mp3/m4a/mp4/mov/aac/wav/aiff; mpv keeps the rest. Window
+   placement stays mpv's (the host reads a placed window back by owning pid, and an
+   in-process window is indistinguishable from the placement overlay's own).
+2. Engine policy UI: the picker is there, but the selection is not read back — the core
+   persists the policy and the FFI has no getter, so reopening settings shows "auto".
 3. Handoff on `next` across engines: stop old, load new, no audio overlap.

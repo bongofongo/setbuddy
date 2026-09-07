@@ -1,9 +1,9 @@
-//! `setwave` — the cross-platform command line player.
+//! `setbuddy` — the cross-platform command line player.
 //!
 //! Each invocation is short-lived. Continuity comes from two places: the SQLite
 //! store holds the library, queue and resume positions, and the engine adopts
-//! the mpv already running on Setwave's well-known socket. So `setwave play`
-//! followed a minute later by `setwave pause` addresses one continuous playback
+//! the mpv already running on Setbuddy's well-known socket. So `setbuddy play`
+//! followed a minute later by `setbuddy pause` addresses one continuous playback
 //! session, with no daemon in between.
 
 use std::path::{Path, PathBuf};
@@ -11,20 +11,20 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use setwave_core::library::{scan_all, scan_folder};
-use setwave_core::paths;
-use setwave_core::player::Player;
-use setwave_core::queue::RepeatMode;
-use setwave_core::selection::{EnginePolicy, EngineRegistry};
-use setwave_core::store::Store;
-use setwave_core::track::format_duration;
-use setwave_core::{PlayerStatus, Track};
-use setwave_engine::{EngineError, SharedEngine};
-use setwave_mpv::MpvEngine;
+use setbuddy_core::library::scan_folder;
+use setbuddy_core::paths;
+use setbuddy_core::player::Player;
+use setbuddy_core::queue::RepeatMode;
+use setbuddy_core::selection::{EnginePolicy, EngineRegistry};
+use setbuddy_core::store::Store;
+use setbuddy_core::track::format_duration;
+use setbuddy_core::{PlayerStatus, Track};
+use setbuddy_engine::{EngineError, SharedEngine};
+use setbuddy_mpv::MpvEngine;
 
 #[derive(Parser)]
 #[command(
-    name = "setwave",
+    name = "setbuddy",
     about = "Play downloaded sets and music from the command line",
     version
 )]
@@ -131,15 +131,18 @@ enum EngineCommand {
 }
 
 fn main() {
+    // Harmless from a shell, where PATH is already whole; the CLI shares the
+    // helper-tool lookups with the app, so it shares the fix.
+    paths::ensure_tool_path();
     if let Err(error) = run() {
         // An uninstalled engine is a setup problem, not a crash: say what to do.
         if let Some(EngineError::EngineMissing { display_name, hint }) =
             error.downcast_ref::<EngineError>()
         {
-            eprintln!("setwave: {display_name} is not installed.\n  {hint}");
+            eprintln!("setbuddy: {display_name} is not installed.\n  {hint}");
             std::process::exit(2);
         }
-        eprintln!("setwave: {error:#}");
+        eprintln!("setbuddy: {error:#}");
         std::process::exit(1);
     }
 }
@@ -244,7 +247,7 @@ fn run() -> Result<()> {
 /// when an AVFoundation engine lands, it goes in front of mpv and the policy
 /// picks it for the containers it can handle.
 fn build_player() -> Result<Player> {
-    paths::ensure_state_dir().context("could not create Setwave's state directory")?;
+    paths::ensure_state_dir().context("could not create Setbuddy's state directory")?;
     let store = Arc::new(Store::open(&paths::database_path())?);
     let engine: SharedEngine = Arc::new(MpvEngine::shared(paths::engine_socket_path())?);
     Ok(Player::new(store, EngineRegistry::new(vec![engine]))?)
@@ -340,14 +343,16 @@ fn library_command(player: &Player, cmd: LibraryCommand) -> Result<()> {
         LibraryCommand::List => {
             let folders = store.folders()?;
             if folders.is_empty() {
-                println!("no watched folders — add one with `setwave library add <dir>`");
+                println!("no watched folders — add one with `setbuddy library add <dir>`");
             }
             for folder in folders {
                 println!("{folder}");
             }
         }
         LibraryCommand::Scan => {
-            let report = scan_all(store)?;
+            // Through the player, not the store: a scan that forgets a deleted
+            // file must drop it from the queue in the same breath.
+            let report = player.rescan_library()?;
             println!(
                 "{} found, {} added, {} updated, {} unchanged, {} removed",
                 report.seen, report.added, report.updated, report.unchanged, report.removed
@@ -500,14 +505,19 @@ fn parse_seek(input: &str) -> Result<Seek> {
 }
 
 /// `SS`, `MM:SS`, or `HH:MM:SS` in seconds.
+///
+/// At most three parts: a fourth would silently be read as days, and
+/// `setbuddy seek 1:2:3:4` is a typo, not a request.
 fn parse_timecode(input: &str) -> Option<f64> {
-    if input.is_empty() {
+    let parts: Vec<&str> = input.split(':').collect();
+    if input.is_empty() || parts.len() > 3 {
         return None;
     }
     let mut total = 0.0;
-    for part in input.split(':') {
+    for part in parts {
         let value: f64 = part.trim().parse().ok()?;
-        if value < 0.0 {
+        // `inf` and `nan` parse as f64; neither is a place in a file.
+        if !value.is_finite() || value < 0.0 {
             return None;
         }
         total = total * 60.0 + value;
@@ -532,8 +542,49 @@ mod tests {
         assert_eq!(parse_timecode("90"), Some(90.0));
         assert_eq!(parse_timecode("1:30"), Some(90.0));
         assert_eq!(parse_timecode("1:12:44"), Some(4364.0));
+        assert_eq!(parse_timecode("0"), Some(0.0));
+        assert_eq!(parse_timecode("90.5"), Some(90.5), "fractions are allowed");
         assert_eq!(parse_timecode(""), None);
         assert_eq!(parse_timecode("abc"), None);
+    }
+
+    #[test]
+    fn refuses_timecodes_that_are_not_a_place_in_a_file() {
+        assert_eq!(parse_timecode("1:2:3:4"), None, "at most H:MM:SS");
+        assert_eq!(parse_timecode("1:-30"), None);
+        assert_eq!(parse_timecode("inf"), None);
+        assert_eq!(parse_timecode("NaN"), None);
+        assert_eq!(parse_timecode("1::30"), None, "an empty part is not zero");
+        assert_eq!(parse_timecode(":"), None);
+    }
+
+    /// The progress bar is drawn from engine-reported numbers, which can be
+    /// absent, zero or beyond the end while a seek is in flight.
+    #[test]
+    fn the_progress_bar_survives_nonsense_positions() {
+        let status = |position: Option<f64>, duration: Option<f64>| PlayerStatus {
+            track: None,
+            position_secs: position,
+            duration_secs: duration,
+            paused: false,
+            idle: false,
+            has_video: false,
+            video_visible: false,
+            queue_len: 0,
+            queue_index: None,
+            repeat: RepeatMode::Off,
+            shuffle: false,
+            loop_positions: Vec::new(),
+            engine_id: None,
+        };
+        assert_eq!(progress_bar(&status(None, Some(100.0))), "");
+        assert_eq!(progress_bar(&status(Some(10.0), None)), "");
+        assert_eq!(progress_bar(&status(Some(10.0), Some(0.0))), "");
+        assert_eq!(progress_bar(&status(Some(10.0), Some(f64::NAN))), "");
+        // Past the end, and before the start: both clamp rather than panicking
+        // on a `repeat` of a negative or oversized count.
+        assert!(progress_bar(&status(Some(500.0), Some(100.0))).contains('━'));
+        assert!(progress_bar(&status(Some(-5.0), Some(100.0))).contains('─'));
     }
 
     #[test]

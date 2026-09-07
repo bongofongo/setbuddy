@@ -4,7 +4,7 @@
 //! machine without mpv:
 //!
 //! ```text
-//! cargo test -p setwave-mpv --features integration -- --test-threads=1
+//! cargo test -p setbuddy-mpv --features integration -- --test-threads=1
 //! ```
 //!
 //! These assert the behaviour the whole product rests on — that the pop-out
@@ -15,8 +15,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use setwave_engine::{EngineSnapshot, PlaybackEngine};
-use setwave_mpv::MpvEngine;
+use setbuddy_engine::{EngineSnapshot, PlaybackEngine};
+use setbuddy_mpv::MpvEngine;
 
 fn asset(name: &str) -> String {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -334,14 +334,14 @@ fn count_mpv_processes() -> usize {
 
 /// The CLI is a series of short-lived processes. A shared engine must therefore
 /// leave mpv playing when it is dropped, and a later engine must adopt it with
-/// its state intact — that is what makes `setwave play` then `setwave pause`
+/// its state intact — that is what makes `setbuddy play` then `setbuddy pause`
 /// work without a daemon.
 #[test]
 fn shared_engine_outlives_its_process_and_is_adopted() {
     // `Instant::now().elapsed()` is ~0, which would make this name collide
     // between runs; the wall clock actually varies.
     let socket = std::env::temp_dir().join(format!(
-        "setwave-test-shared-{}-{}.sock",
+        "setbuddy-test-shared-{}-{}.sock",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

@@ -2,13 +2,13 @@
 //!
 //! This crate defines *what a player can do* and nothing about *how*. No engine
 //! implementation lives here, and no code in this crate may reference mpv,
-//! AVFoundation, or any other backend. `setwave-core` depends only on this
+//! AVFoundation, or any other backend. `setbuddy-core` depends only on this
 //! contract, which is what allows the v1 mpv engine to be replaced — or joined —
 //! without touching the library index, queue, resume logic, CLI, or UI.
 //!
 //! Every type crossing this boundary is deliberately restricted to shapes UniFFI
 //! can represent (`String`, `f64`, `bool`, `Option`, `Vec`, plain records, enums
-//! with named fields). That is not incidental: `setwave-ffi` mirrors this trait
+//! with named fields). That is not incidental: `setbuddy-ffi` mirrors this trait
 //! as a UniFFI *foreign trait* and adapts implementations written in Swift back
 //! to it, which is how an AVFoundation engine will satisfy this same contract in
 //! v2. Keeping the signatures FFI-clean is free; retrofitting them is not.
@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 /// What an engine can play and what window behaviour it offers.
 ///
-/// Used by engine selection in `setwave-core` — the policy asks capabilities,
+/// Used by engine selection in `setbuddy-core` — the policy asks capabilities,
 /// never the engine's identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineCapabilities {
@@ -45,9 +45,16 @@ impl EngineCapabilities {
     }
 
     /// Whether this engine can open the given path, judged by extension.
+    ///
+    /// Only the final path segment is considered. A dot in a *directory* name
+    /// —`/Sets.2024/opening` — is not an extension, and reading one as such
+    /// would offer files to engines that cannot open them.
     pub fn handles_path(&self, path: &str) -> bool {
-        match path.rsplit_once('.') {
-            Some((_, ext)) if !ext.is_empty() => self.handles_extension(ext),
+        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        match name.rsplit_once('.') {
+            // A leading dot is a hidden file, not an extension: `.mp3` names a
+            // file called "mp3", and there is nothing to play in it.
+            Some((stem, ext)) if !ext.is_empty() && !stem.is_empty() => self.handles_extension(ext),
             _ => false,
         }
     }
@@ -198,6 +205,58 @@ impl Default for VideoWindowLayout {
     /// Big enough to watch, small enough to leave the desktop usable.
     fn default() -> Self {
         Self::ScreenFraction(0.4)
+    }
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::EngineCapabilities;
+
+    fn caps(containers: &[&str]) -> EngineCapabilities {
+        EngineCapabilities {
+            id: "test".into(),
+            display_name: "Test".into(),
+            containers: containers.iter().map(|c| c.to_string()).collect(),
+            video: true,
+            ontop_window: true,
+            native_pip: false,
+        }
+    }
+
+    #[test]
+    fn extensions_match_whatever_case_and_dot_they_arrive_in() {
+        let c = caps(&["mp3", "WebM"]);
+        assert!(c.handles_extension("mp3"));
+        assert!(c.handles_extension(".MP3"));
+        assert!(
+            c.handles_extension("webm"),
+            "the list itself may be mixed case"
+        );
+        assert!(!c.handles_extension("flac"));
+        assert!(!c.handles_extension(""));
+    }
+
+    #[test]
+    fn only_the_final_segment_carries_the_extension() {
+        let c = caps(&["mp3"]);
+        assert!(c.handles_path("/sets/track.mp3"));
+        assert!(c.handles_path("/sets/two.dots.mp3"));
+        assert!(
+            !c.handles_path("/Sets.mp3/opening"),
+            "a dot in a folder name is not an extension"
+        );
+        assert!(!c.handles_path("/sets/no-extension"));
+        assert!(!c.handles_path("/sets/trailing."));
+        assert!(
+            !c.handles_path("/sets/.mp3"),
+            "a dotfile named mp3 is not an mp3"
+        );
+        assert!(!c.handles_path(""));
+    }
+
+    #[test]
+    fn an_engine_that_claims_nothing_claims_nothing() {
+        assert!(!caps(&[]).handles_path("/sets/track.mp3"));
     }
 }
 

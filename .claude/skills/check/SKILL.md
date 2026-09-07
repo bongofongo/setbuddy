@@ -7,9 +7,9 @@ Pick the tier from what changed (git diff --stat):
 
 | Touched | Tier |
 |---|---|
-| `setwave-engine`, `setwave-core` only | `fast` |
-| `setwave-mpv`, `setwave-cli` | `rust` |
-| `setwave-ffi`, `apps/mac`, `tests/swift` | `swift` |
+| `setbuddy-engine`, `setbuddy-core` only | `fast` |
+| `setbuddy-mpv`, `setbuddy-cli` | `rust` |
+| `setbuddy-ffi`, `apps/mac`, `tests/swift` | `swift` |
 | scripts, Cargo.toml, unsure | `all` |
 
 Run `scripts/check.sh <tier>` in a tmux pane if it is the `swift`/`all` tier (minutes),

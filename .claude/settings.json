@@ -28,7 +28,7 @@
     ],
     "deny": [
       "Bash(rm -rf ~:*)",
-      "Read(~/Library/Application Support/Setwave/**)"
+      "Read(~/Library/Application Support/Setbuddy/**)"
     ]
   },
   "hooks": {

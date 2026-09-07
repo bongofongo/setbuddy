@@ -275,6 +275,41 @@ impl Queue {
         }
     }
 
+    /// Drop every row whose id `keep` rejects, returning whether anything went.
+    ///
+    /// The current row and the loop follow their tracks: a scan that forgets a
+    /// deleted file must not silently reassign "what is playing" to a
+    /// different one, nor leave a loop pointing at rows that shifted up.
+    /// A current row that is itself dropped selects nothing.
+    pub fn retain(&mut self, keep: impl Fn(i64) -> bool) -> bool {
+        // Where each surviving row ends up, so current and the loop can be
+        // rewritten by position rather than by id — a queue may hold the same
+        // track twice.
+        let mut moved_to: Vec<Option<usize>> = Vec::with_capacity(self.items.len());
+        let mut kept: Vec<i64> = Vec::with_capacity(self.items.len());
+        for id in &self.items {
+            if keep(*id) {
+                moved_to.push(Some(kept.len()));
+                kept.push(*id);
+            } else {
+                moved_to.push(None);
+            }
+        }
+        if kept.len() == self.items.len() {
+            return false;
+        }
+
+        self.items = kept;
+        self.current = self.current.and_then(|c| moved_to[c]);
+        self.loop_set = self
+            .loop_set
+            .take()
+            .map(|set| set.iter().filter_map(|p| moved_to[*p]).collect::<Vec<_>>())
+            .filter(|set: &Vec<usize>| !set.is_empty());
+        self.reshuffle();
+        true
+    }
+
     pub fn clear(&mut self) {
         self.items.clear();
         self.order.clear();
@@ -642,6 +677,54 @@ mod tests {
         );
         q.clear();
         assert_eq!(q.loop_set(), None);
+    }
+
+    #[test]
+    fn retaining_drops_rows_and_carries_the_current_track_and_loop() {
+        let mut q = queue_of(5);
+        q.select_track(4);
+        q.set_loop(Some(vec![1, 3, 4]));
+
+        assert!(q.retain(|id| id != 2 && id != 3), "two rows went");
+        assert_eq!(q.items(), [1, 4, 5]);
+        assert_eq!(q.current(), Some(4), "the playing track is still playing");
+        assert_eq!(q.current_index(), Some(1), "at its new position");
+        assert_eq!(
+            q.loop_set(),
+            Some(&[1, 2][..]),
+            "the loop follows the rows that survived"
+        );
+    }
+
+    #[test]
+    fn retaining_everything_changes_nothing() {
+        let mut q = queue_of(3);
+        q.next();
+        assert!(!q.retain(|_| true));
+        assert_eq!(q.items(), [1, 2, 3]);
+        assert_eq!(q.current_index(), Some(1));
+    }
+
+    #[test]
+    fn dropping_the_playing_row_selects_nothing() {
+        let mut q = queue_of(3);
+        q.next();
+        assert_eq!(q.current(), Some(2));
+        assert!(q.retain(|id| id != 2));
+        assert_eq!(q.items(), [1, 3]);
+        assert_eq!(q.current(), None, "what was playing is gone");
+        assert_eq!(q.next(), Some(1), "and next starts from the top");
+    }
+
+    #[test]
+    fn retaining_nothing_empties_the_queue() {
+        let mut q = queue_of(3);
+        q.set_loop(Some(vec![0, 1]));
+        assert!(q.retain(|_| false));
+        assert!(q.is_empty());
+        assert_eq!(q.current(), None);
+        assert_eq!(q.loop_set(), None, "a loop over no rows is no loop");
+        assert_eq!(q.next(), None);
     }
 
     #[test]

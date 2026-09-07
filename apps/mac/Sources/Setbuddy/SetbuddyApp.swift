@@ -1,8 +1,8 @@
 import SwiftUI
-import SetwaveUI
+import SetbuddyUI
 
 @main
-struct SetwaveApp: App {
+struct SetbuddyApp: App {
     @StateObject private var model = PlayerModel()
 
     var body: some Scene {

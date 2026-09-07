@@ -6,14 +6,14 @@
 #   scripts/check.sh swift   + bindings, swift build, swift test, foreign-engine check
 #   scripts/check.sh all     everything (== swift)
 #
-# Every tier runs with an isolated SETWAVE_STATE_DIR so nothing touches the real
+# Every tier runs with an isolated SETBUDDY_STATE_DIR so nothing touches the real
 # library or the mpv the user may have playing.
 set -euo pipefail
 
 TIER="${1:-fast}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export SETWAVE_STATE_DIR="${SETWAVE_STATE_DIR:-$ROOT/target/check-state}"
-rm -rf "$SETWAVE_STATE_DIR"; mkdir -p "$SETWAVE_STATE_DIR"
+export SETBUDDY_STATE_DIR="${SETBUDDY_STATE_DIR:-$ROOT/target/check-state}"
+rm -rf "$SETBUDDY_STATE_DIR"; mkdir -p "$SETBUDDY_STATE_DIR"
 cd "$ROOT"
 
 step() { printf '\n==> %s\n' "$*"; }
@@ -32,9 +32,9 @@ rust() {
         return
     fi
     step "mpv integration tests"
-    cargo test -p setwave-mpv --features integration -- --test-threads=1
+    cargo test -p setbuddy-mpv --features integration -- --test-threads=1
     step "cli end-to-end tests"
-    cargo test -p setwave-cli --features integration -- --test-threads=1
+    cargo test -p setbuddy-cli --features integration -- --test-threads=1
 }
 
 swift_tier() {

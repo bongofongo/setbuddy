@@ -100,6 +100,8 @@ final class SwiftNullEngine: PlaybackEngine, @unchecked Sendable {
 
     func setVideoOntop(ontop: Bool) throws { record("setVideoOntop(\(ontop))") }
 
+    func setVideoWindowLayout(spec: String) throws { record("setVideoWindowLayout(\(spec))") }
+
     func stop() throws {
         record("stop()")
         lock.lock(); defer { lock.unlock() }
@@ -153,25 +155,25 @@ final class SnapshotRecorder: PlayerObserver, @unchecked Sendable {
 
 let assetDir = CommandLine.arguments.count > 1
     ? CommandLine.arguments[1]
-    : "crates/setwave-mpv/tests/assets"
+    : "crates/setbuddy-mpv/tests/assets"
 let mp3 = "\(assetDir)/tiny.mp3"
 
 print("1. a Swift engine is accepted and preferred over mpv")
 let swiftEngine = SwiftNullEngine(id: "swiftnull", containers: ["mp3", "wav", "m4a"])
-let setwave: Setwave
+let setbuddy: Setbuddy
 do {
-    setwave = try Setwave.withEngines(engines: [swiftEngine])
+    setbuddy = try Setbuddy.withEngines(engines: [swiftEngine])
 } catch {
-    print("  FAIL could not construct Setwave: \(error)")
+    print("  FAIL could not construct Setbuddy: \(error)")
     exit(1)
 }
 
-let ids = setwave.engineIds()
+let ids = setbuddy.engineIds()
 check(ids == ["swiftnull", "mpv"], "registration order is preference order: \(ids)")
 
 print("2. the core routes a file to the Swift engine")
 do {
-    let track = try setwave.playPath(path: mp3)
+    let track = try setbuddy.playPath(path: mp3)
     check(track.displayLabel == "tiny", "indexed and named the track: \(track.displayLabel)")
 } catch {
     print("  FAIL playPath threw: \(error)")
@@ -185,7 +187,7 @@ check(loads.first?.hasSuffix("tiny.mp3, nil)") ?? false,
 
 print("3. state flows back out through the same contract")
 do {
-    let snap = try setwave.snapshot()
+    let snap = try setbuddy.snapshot()
     check(snap.engineId == "swiftnull", "snapshot reports the Swift engine: \(snap.engineId ?? "nil")")
     check(snap.durationSecs == 3600, "duration came from the Swift engine")
     check(!snap.idle, "core sees the Swift engine as playing")
@@ -196,8 +198,8 @@ do {
 
 print("4. commands reach the Swift engine")
 do {
-    _ = try setwave.togglePaused()
-    try setwave.seekAbsolute(seconds: 1200)
+    _ = try setbuddy.togglePaused()
+    try setbuddy.seekAbsolute(seconds: 1200)
     let calls = swiftEngine.recordedCalls()
     check(calls.contains { $0.hasPrefix("setPaused(") }, "pause reached the engine")
     check(calls.contains("seekAbsolute(1200.0)"), "seek reached the engine")
@@ -206,35 +208,62 @@ do {
     failures += 1
 }
 
-print("5. errors cross the boundary as typed cases")
+print("5. the window layout reaches the engine as the settings string")
 do {
-    _ = try setwave.playPath(path: "\(assetDir)/definitely-not-here.mp3")
-    check(false, "playing a missing file should throw")
-} catch let error as SetwaveError {
-    // The path does not exist, so indexing rejects it before any engine is asked.
-    if case .Playback = error {
-        check(true, "missing file surfaced as a typed SetwaveError")
-    } else if case .UnsupportedFile = error {
-        check(true, "missing file surfaced as a typed SetwaveError")
-    } else {
-        check(false, "unexpected SetwaveError case: \(error)")
-    }
+    try setbuddy.setVideoWindowLayout(spec: "1280+100+50/0")
+    check(swiftEngine.recordedCalls().contains("setVideoWindowLayout(1280+100+50/0)"),
+          "the engine was given the layout verbatim")
 } catch {
-    check(false, "expected SetwaveError, got \(error)")
+    print("  FAIL setVideoWindowLayout threw: \(error)")
+    failures += 1
 }
 
-print("6. observers are called from the Rust ticker thread")
+print("6. errors cross the boundary as typed cases")
+do {
+    _ = try setbuddy.playPath(path: "\(assetDir)/definitely-not-here.mp3")
+    check(false, "playing a missing file should throw")
+} catch let error as SetbuddyError {
+    // The path does not exist, so indexing rejects it before any engine is asked.
+    if case .Playback = error {
+        check(true, "missing file surfaced as a typed SetbuddyError")
+    } else if case .UnsupportedFile = error {
+        check(true, "missing file surfaced as a typed SetbuddyError")
+    } else {
+        check(false, "unexpected SetbuddyError case: \(error)")
+    }
+} catch {
+    check(false, "expected SetbuddyError, got \(error)")
+}
+
+print("7. handing a file to another engine stops the first one")
+do {
+    // A webm belongs to mpv, so this crosses engines. The old engine must be
+    // stopped before the new one loads, or both hold the audio device.
+    _ = try setbuddy.playPath(path: "\(assetDir)/tiny.webm")
+    let calls = swiftEngine.recordedCalls()
+    check(calls.contains("stop()"), "the Swift engine was stopped on the way out")
+    check(calls.last == "stop()", "and nothing was asked of it afterwards: \(calls.suffix(3))")
+    let snap = try setbuddy.snapshot()
+    check(snap.engineId == "mpv", "the webm went to mpv: \(snap.engineId ?? "nil")")
+    // Back to the Swift engine, so the ticker checks below see a known state.
+    _ = try setbuddy.playPath(path: mp3)
+} catch {
+    print("  FAIL engine handoff threw: \(error)")
+    failures += 1
+}
+
+print("8. observers are called from the Rust ticker thread")
 let recorder = SnapshotRecorder()
-setwave.addObserver(observer: recorder)
-setwave.startTicker(intervalMs: 50)
+setbuddy.addObserver(observer: recorder)
+setbuddy.startTicker(intervalMs: 50)
 Thread.sleep(forTimeInterval: 0.5)
-setwave.stopTicker()
+setbuddy.stopTicker()
 check(recorder.count() > 1, "received \(recorder.count()) snapshots from Rust")
 check(recorder.latest()?.engineId == "swiftnull", "pushed snapshots describe the Swift engine")
 
-print("7. shutdown reaches the Swift engine")
+print("9. shutdown reaches the Swift engine")
 do {
-    try setwave.quit()
+    try setbuddy.quit()
 } catch {
     print("  FAIL quit threw: \(error)")
     failures += 1

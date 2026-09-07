@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use setwave_engine::{EngineSnapshot, SharedEngine, VideoWindowLayout};
+use setbuddy_engine::{EngineSnapshot, SharedEngine, VideoWindowLayout};
 
 use crate::error::{CoreError, Result};
 use crate::probe::probe;
@@ -28,6 +28,7 @@ const SETTING_LOOP: &str = "queue_loop";
 /// `VideoWindowLayout` in its settings form: `40%`, `fullscreen`, `1280`, or
 /// `1280+100+50`.
 const SETTING_VIDEO_WINDOW: &str = "video_window_size";
+const SETTING_VIDEO_SURFACE: &str = "video_surface";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerStatus {
@@ -391,6 +392,20 @@ impl Player {
         self.apply_video_window_layout(layout)
     }
 
+    /// Where the picture goes when video is switched on, as the app saved it.
+    ///
+    /// Core stores it and does nothing else with it: only an engine running
+    /// inside the app's own process can hand it a surface to draw, and knowing
+    /// which engine that is belongs to the app, not here. `None` until chosen.
+    pub fn video_surface(&self) -> Result<Option<String>> {
+        Ok(self.store.setting(SETTING_VIDEO_SURFACE)?)
+    }
+
+    pub fn set_video_surface(&self, surface: &str) -> Result<()> {
+        self.store.set_setting(SETTING_VIDEO_SURFACE, surface)?;
+        Ok(())
+    }
+
     /// Put up an empty video window for the user to place by hand. Returns the
     /// id of the process owning it, so the app can read its bounds back, or
     /// `None` when no engine can show one.
@@ -530,6 +545,50 @@ impl Player {
         self.persist_queue()
     }
 
+    /// Rescan every watched folder, then drop anything the scan forgot from
+    /// the queue.
+    ///
+    /// The two belong together. A scan deletes the rows of files that are gone,
+    /// and SQLite cascades that into `queue_items` — but the queue this player
+    /// holds in memory still lists them, and the next save would try to write a
+    /// row pointing at a track that no longer exists. Callers get one call that
+    /// leaves the library and the queue agreeing with each other.
+    ///
+    /// Walks the disk and probes new files, so keep it off a UI thread.
+    pub fn rescan_library(&self) -> Result<crate::library::ScanReport> {
+        let report = crate::library::scan_all(&self.store)?;
+        if report.removed > 0 {
+            self.prune_missing_tracks()?;
+        }
+        Ok(report)
+    }
+
+    /// Drop queued rows whose track is no longer in the library, returning
+    /// whether any went. What is playing keeps playing if it survived.
+    pub fn prune_missing_tracks(&self) -> Result<bool> {
+        let ids = {
+            let state = self.state.lock().expect("player state poisoned");
+            state.queue.items().to_vec()
+        };
+        if ids.is_empty() {
+            return Ok(false);
+        }
+        let alive = self.store.existing_track_ids(&ids)?;
+        // Compared as sets: a queue may hold the same track twice, so the row
+        // count and the id count are not the same number.
+        if ids.iter().all(|id| alive.contains(id)) {
+            return Ok(false);
+        }
+        let changed = {
+            let mut state = self.state.lock().expect("player state poisoned");
+            state.queue.retain(|id| alive.contains(&id))
+        };
+        if changed {
+            self.persist_queue()?;
+        }
+        Ok(changed)
+    }
+
     pub fn queue_tracks(&self) -> Result<Vec<Track>> {
         let ids = {
             let state = self.state.lock().expect("player state poisoned");
@@ -587,7 +646,48 @@ impl Player {
             .set_setting(SETTING_SHUFFLE, if on { "on" } else { "off" })
     }
 
+    /// The policy in force, restored from the store at construction. What the
+    /// settings UI has to show to be telling the truth after a restart.
+    pub fn engine_policy(&self) -> EnginePolicy {
+        self.registry
+            .lock()
+            .expect("registry poisoned")
+            .policy()
+            .clone()
+    }
+
+    /// What each registered engine can do, in preference order. The settings
+    /// UI names engines by `display_name`, never by id.
+    pub fn engine_capabilities(&self) -> Vec<setbuddy_engine::EngineCapabilities> {
+        self.registry
+            .lock()
+            .expect("registry poisoned")
+            .all()
+            .iter()
+            .map(|e| e.capabilities())
+            .collect()
+    }
+
+    /// Force an engine, or go back to picking by capability.
+    ///
+    /// An id no engine answers to is refused rather than stored: accepting it
+    /// would persist a policy under which *every* file reports as unplayable,
+    /// and the failure would surface later, at play time, far from the choice
+    /// that caused it.
     pub fn set_engine_policy(&self, policy: EnginePolicy) -> Result<()> {
+        {
+            let registry = self.registry.lock().expect("registry poisoned");
+            if let EnginePolicy::Force(id) = &policy {
+                if registry.by_id(id).is_none() {
+                    return Err(CoreError::Internal {
+                        message: format!(
+                            "no engine with id \"{id}\" is available (have: {})",
+                            registry.ids().join(", ")
+                        ),
+                    });
+                }
+            }
+        }
         self.store
             .set_setting(SETTING_ENGINE_POLICY, &policy.as_str())?;
         self.registry

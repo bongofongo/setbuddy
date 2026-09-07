@@ -9,7 +9,7 @@
 //! same reader thread, so splitting them across locks would buy nothing and make
 //! the wait logic subtly wrong.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -46,6 +46,18 @@ struct Bus {
     connected: bool,
     /// Why the connection ended, if it did.
     disconnect_reason: Option<String>,
+    /// Request ids whose caller gave up. A reply arriving for one of these is
+    /// discarded rather than stored for a reader that will never come.
+    abandoned: HashSet<u64>,
+}
+
+impl Bus {
+    /// Stop waiting for `rid`: drop anything already buffered for it, and
+    /// remember to drop a reply that arrives later.
+    fn abandon(&mut self, rid: u64) {
+        self.replies.remove(&rid);
+        self.abandoned.insert(rid);
+    }
 }
 
 pub(crate) struct Ipc {
@@ -85,7 +97,7 @@ impl Ipc {
 
         let weak = Arc::downgrade(&ipc);
         let handle = std::thread::Builder::new()
-            .name("setwave-mpv-ipc".into())
+            .name("setbuddy-mpv-ipc".into())
             .spawn(move || {
                 let mut lines = BufReader::new(read_half).lines();
                 let reason = loop {
@@ -117,6 +129,13 @@ impl Ipc {
     fn dispatch(&self, msg: Value) {
         let mut bus = self.bus.lock().expect("ipc bus poisoned");
         if let Some(rid) = msg.get("request_id").and_then(Value::as_u64) {
+            // A reply to a request nobody is waiting for any more is dropped.
+            // Keeping it would grow `replies` for the life of the process, one
+            // entry per timeout — and mpv answers late exactly when it is
+            // struggling, which is when a leak matters most.
+            if bus.abandoned.remove(&rid) {
+                return;
+            }
             bus.replies.insert(rid, msg);
             self.cv.notify_all();
             return;
@@ -186,6 +205,7 @@ impl Ipc {
                 });
             }
             if !bus.connected {
+                bus.abandon(rid);
                 return Err(IpcError::Disconnected(
                     bus.disconnect_reason
                         .clone()
@@ -193,6 +213,7 @@ impl Ipc {
                 ));
             }
             let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                bus.abandon(rid);
                 return Err(IpcError::Timeout);
             };
             let (guard, wait) = self
@@ -201,6 +222,7 @@ impl Ipc {
                 .expect("ipc bus poisoned");
             bus = guard;
             if wait.timed_out() && !bus.replies.contains_key(&rid) {
+                bus.abandon(rid);
                 return Err(IpcError::Timeout);
             }
         }

@@ -5,7 +5,7 @@
 //! another entry in the registry with narrower `containers` and `native_pip`
 //! set, and this code does not change.
 
-use setwave_engine::{EngineError, SharedEngine};
+use setbuddy_engine::{EngineError, SharedEngine};
 
 use crate::error::{CoreError, Result};
 
@@ -120,7 +120,7 @@ impl EngineRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use setwave_engine::null::NullEngine;
+    use setbuddy_engine::null::NullEngine;
     use std::sync::Arc;
 
     fn registry() -> EngineRegistry {
@@ -163,7 +163,7 @@ mod tests {
         assert!(matches!(
             r.select_for("/a/notes.txt"),
             Err(CoreError::Engine(
-                setwave_engine::EngineError::Unsupported { .. }
+                setbuddy_engine::EngineError::Unsupported { .. }
             ))
         ));
     }
@@ -179,7 +179,7 @@ mod tests {
             matches!(
                 r.select_for("/sets/palms.webm"),
                 Err(CoreError::Engine(
-                    setwave_engine::EngineError::Unsupported { .. }
+                    setbuddy_engine::EngineError::Unsupported { .. }
                 ))
             ),
             "a forced engine that cannot open the file is an error, not a fallback"

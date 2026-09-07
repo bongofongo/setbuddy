@@ -7,7 +7,7 @@
 //! Neither is required. A file that cannot be probed is still indexed and still
 //! plays; it just shows its filename and learns its duration on first play.
 //! That matters because `ffprobe` arrives as a dependency of Homebrew's mpv
-//! rather than anything Setwave installs, so it may simply not be there.
+//! rather than anything Setbuddy installs, so it may simply not be there.
 
 use std::path::Path;
 use std::process::Command;

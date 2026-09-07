@@ -1,5 +1,5 @@
 [package]
-name = "setwave-ffi"
+name = "setbuddy-ffi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,16 +7,16 @@ license.workspace = true
 [lib]
 # `cdylib` for the app to link against, `lib` so the bindgen binary can see it.
 crate-type = ["cdylib", "staticlib", "lib"]
-name = "setwave_ffi"
+name = "setbuddy_ffi"
 
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
 
 [dependencies]
-setwave-core.workspace = true
-setwave-engine.workspace = true
-setwave-mpv.workspace = true
+setbuddy-core.workspace = true
+setbuddy-engine.workspace = true
+setbuddy-mpv.workspace = true
 uniffi = { version = "0.32", features = ["cli"] }
 thiserror.workspace = true
 

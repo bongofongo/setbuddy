@@ -1,10 +1,11 @@
 import Foundation
 import SwiftUI
-import SetwaveCore
+import SetbuddyAV
+import SetbuddyCore
 
 /// The Rust core's handle. Aliased because this executable module is itself
-/// named `Setwave`, so the bare name would resolve to the module.
-typealias Core = SetwaveCore.Setwave
+/// named `Setbuddy`, so the bare name would resolve to the module.
+typealias Core = SetbuddyCore.Setbuddy
 
 /// Receives snapshots pushed from the Rust ticker thread and forwards them to
 /// the main actor.
@@ -75,12 +76,36 @@ public final class PlayerModel: ObservableObject {
     /// One lane for row artwork. First requests shell out to ffmpeg, and a
     /// freshly staged folder asks for every row at once — serial keeps that
     /// from fanning out into a process per track.
-    private let artworkLane = DispatchQueue(label: "setwave.artwork", qos: .utility)
+    private let artworkLane = DispatchQueue(label: "setbuddy.artwork", qos: .utility)
 
     /// Where and how large the pop-out is when it next appears, in the core's
     /// settings form: `"40%"` of the screen's width, `"fullscreen"`, a pixel
     /// width like `"1280"`, or width and top-left corner like `"1280+100+50"`.
     @Published public private(set) var videoWindowLayout: String = "40%"
+
+    /// Listening mode: the expanded player. Owned here rather than in the view
+    /// because with the panel as the video surface, expanding *is* summoning
+    /// the set — there is no disc to press in there — so the state has a
+    /// consequence beyond layout.
+    @Published public private(set) var isExpanded = false
+
+    /// A summon asked for but not yet reflected in a snapshot. Without it the
+    /// 4 Hz ticker would ask again before the first request had landed.
+    private var videoRequest: VideoRequest?
+
+    /// The engine policy in force: `"auto"`, or an engine id that is always
+    /// used. Read back from the core so settings show what is really set.
+    @Published public private(set) var enginePolicy: String = "auto"
+
+    /// What each registered engine can do, in preference order. Settings name
+    /// engines from this, never from an id spelled out in a view.
+    @Published public private(set) var engines: [EngineCapabilities] = []
+
+    /// Where the picture goes when the set is summoned: the engine's own
+    /// floating window, or the panel's own backdrop. Only an engine inside
+    /// this process can draw into the panel, so the choice only bites while
+    /// AVFoundation is the engine playing — see `panelVideoShowing`.
+    @Published public private(set) var videoSurface: VideoSurface = .window
 
     /// The process owning the placement window while one is up. Nil otherwise.
     @Published public private(set) var placementPid: UInt32?
@@ -95,13 +120,19 @@ public final class PlayerModel: ObservableObject {
 
     private var core: Core?
     private var bridge: SnapshotBridge?
+    /// Held, not just registered: the panel surface is a Swift-to-Swift
+    /// arrangement with this engine that the core knows nothing about.
+    private let av = AVFoundationEngine()
     private let nowPlaying = NowPlayingBridge()
 
     public init() {
         engineAvailable = mpvAvailable()
         guard engineAvailable else { return }
         do {
-            let core = try Core()
+            // AVFoundation first: registration order is preference order, so
+            // it takes the containers it decodes natively and mpv keeps the
+            // rest (webm, mkv, opus, flac, and anything unusual).
+            let core = try Core.withEngines(engines: [av])
             self.core = core
 
             let bridge = SnapshotBridge { [weak self] snapshot in
@@ -120,6 +151,10 @@ public final class PlayerModel: ObservableObject {
             )
             reloadLibrary()
             videoWindowLayout = (try? core.videoWindowLayout()) ?? videoWindowLayout
+            videoSurface = VideoSurface.parse((try? core.videoSurface()) ?? "window")
+            av.setVideoSurface(videoSurface)
+            enginePolicy = core.enginePolicy()
+            engines = core.engines()
         } catch {
             lastError = describe(error)
         }
@@ -156,6 +191,13 @@ public final class PlayerModel: ObservableObject {
                 self.pendingSeek = nil
             }
         }
+
+        // A request is done once the engine agrees, or once waiting for it has
+        // clearly failed — after which the engine's own state is the truth.
+        if let videoRequest, snapshot.videoVisible == videoRequest.want || Date() > videoRequest.deadline {
+            self.videoRequest = nil
+        }
+        syncPanelVideo()
 
         refreshArtwork(for: snapshot)
         nowPlaying.update(with: snapshot)
@@ -276,6 +318,116 @@ public final class PlayerModel: ObservableObject {
         do {
             try core.setVideoWindowLayout(spec: spec)
             videoWindowLayout = try core.videoWindowLayout()
+            lastError = nil
+        } catch {
+            lastError = describe(error)
+        }
+    }
+
+    /// Whether the panel could show video at all — that is, whether an engine
+    /// that can draw into this process is registered. False on a build or a
+    /// machine where only mpv is available.
+    public var panelVideoSupported: Bool {
+        engineIds.contains(av.capabilities().id)
+    }
+
+    /// Whether the set *would* play inside the panel for what is playing now:
+    /// the panel is where it was asked to go, the file has a picture, and the
+    /// engine holding it is the one that can draw here. A webm on mpv pops out
+    /// to its own window however this is set — mpv has no surface to hand over.
+    public var panelVideoPossible: Bool {
+        videoSurface == .panel
+            && snapshot?.hasVideo == true
+            && snapshot?.engineId == av.capabilities().id
+    }
+
+    /// Whether the panel is drawing video right now.
+    public var panelVideoShowing: Bool {
+        panelVideoPossible && snapshot?.videoVisible == true
+    }
+
+    /// What a key does in the expanded player.
+    ///
+    /// The mapping lives here rather than in the view so it can be tested
+    /// without a window, and so every surface that grows a keyboard answers
+    /// the same keys. Everything goes through the core, which is what keeps
+    /// the menu bar's idea of the set and the engine's own state one thing.
+    public enum PlayerKey: Equatable {
+        case playPause
+        case skipBack
+        case skipForward
+        case next
+        case previous
+        case restart
+        case volumeUp
+        case volumeDown
+        case collapse
+
+        public static func from(_ key: KeyEquivalent, modifiers: EventModifiers = []) -> PlayerKey? {
+            switch key {
+            case .space: return .playPause
+            case .leftArrow: return modifiers.contains(.command) ? .previous : .skipBack
+            case .rightArrow: return modifiers.contains(.command) ? .next : .skipForward
+            case .upArrow: return .volumeUp
+            case .downArrow: return .volumeDown
+            case .escape: return .collapse
+            case KeyEquivalent("k"): return .playPause
+            case KeyEquivalent("j"): return .skipBack
+            case KeyEquivalent("l"): return .skipForward
+            case KeyEquivalent("r"): return .restart
+            case KeyEquivalent("n"): return .next
+            case KeyEquivalent("p"): return .previous
+            default: return nil
+            }
+        }
+    }
+
+    /// Steps match the buttons the keyboard replaces, so the two agree.
+    public func perform(_ key: PlayerKey) {
+        switch key {
+        case .playPause: togglePlayPause()
+        case .skipBack: skip(-30)
+        case .skipForward: skip(30)
+        case .next: next()
+        case .previous: previous()
+        case .restart: seek(to: 0)
+        case .volumeUp: volume = min(volume + 5, 100)
+        case .volumeDown: volume = max(volume - 5, 0)
+        case .collapse: setExpanded(false)
+        }
+    }
+
+    /// Expand or collapse the player. With the panel as the surface this also
+    /// summons the set or puts it away.
+    public func setExpanded(_ expanded: Bool) {
+        guard isExpanded != expanded else { return }
+        isExpanded = expanded
+        syncPanelVideo()
+    }
+
+    /// Keep the picture in step with the expanded player: summoned while it is
+    /// open, away while it is not. Runs on every snapshot too, so a track that
+    /// changes under an open player brings its own video up.
+    private func syncPanelVideo() {
+        guard panelVideoPossible, videoRequest == nil else { return }
+        guard (snapshot?.videoVisible == true) != isExpanded else { return }
+        videoRequest = VideoRequest(want: isExpanded, deadline: Date().addingTimeInterval(2))
+        toggleVideo()
+    }
+
+    /// The engine's own view, for the panel to host. Stable across redraws.
+    public func panelVideoView() -> NSView {
+        av.panelVideoView()
+    }
+
+    /// Choose between the floating window and the panel's backdrop. Persisted
+    /// like the layout is, and applied to the engine at once.
+    public func setVideoSurface(_ surface: VideoSurface) {
+        guard let core else { return }
+        do {
+            try core.setVideoSurface(surface: surface.rawValue)
+            videoSurface = surface
+            av.setVideoSurface(surface)
             lastError = nil
         } catch {
             lastError = describe(error)
@@ -431,14 +583,34 @@ public final class PlayerModel: ObservableObject {
     }
 
     /// Rescan watched folders off the main thread — this walks the disk.
-    /// Engines available, in preference order. Currently just mpv; an
-    /// AVFoundation engine would appear ahead of it.
-    public var engineIds: [String] { core?.engineIds() ?? [] }
+    /// Engines available, in preference order: AVFoundation, then mpv.
+    public var engineIds: [String] { engines.map(\.id) }
 
     /// `"auto"` picks the first engine that can open each file; an engine id
     /// forces that engine and reports unsupported files rather than falling back.
     public func setEnginePolicy(_ policy: String) {
         perform { core in try core.setEnginePolicy(policy: policy) }
+        enginePolicy = core?.enginePolicy() ?? policy
+    }
+
+    /// Engines that run in their own process. They are the ones that can put
+    /// up a window for the user to place by hand, because the host reads that
+    /// window back by owning pid.
+    public var outOfProcessEngines: [EngineCapabilities] {
+        engines.filter { $0.id != av.capabilities().id }
+    }
+
+    /// Whether the current policy can still reach an engine of its own — a
+    /// forced in-process engine can never open a window for placement.
+    public var windowPlacementPossible: Bool {
+        enginePolicy == "auto" || outOfProcessEngines.contains { $0.id == enginePolicy }
+    }
+
+    /// Whether the video window settings can affect anything: either the set
+    /// itself is set to open in a window, or a file that only an out-of-process
+    /// engine can play would still open one.
+    public var videoWindowSettingsApply: Bool {
+        videoSurface == .window || windowPlacementPossible
     }
 
     public func removeWatchedFolder(_ path: String) {
@@ -529,6 +701,12 @@ public final class PlayerModel: ObservableObject {
     }
 }
 
+/// A summon that has been issued but not yet confirmed by the engine.
+private struct VideoRequest {
+    let want: Bool
+    let deadline: Date
+}
+
 /// A seek that has been issued but not yet confirmed by the engine.
 private struct PendingSeek {
     let target: Double
@@ -537,7 +715,7 @@ private struct PendingSeek {
 
 /// Prefer the typed message the core provides over Swift's generic wrapping.
 func describe(_ error: Error) -> String {
-    if let error = error as? SetwaveError {
+    if let error = error as? SetbuddyError {
         return error.localizedDescription
     }
     return error.localizedDescription

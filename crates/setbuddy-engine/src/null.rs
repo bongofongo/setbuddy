@@ -1,6 +1,6 @@
 //! A deterministic in-memory engine.
 //!
-//! Two jobs. It lets `setwave-core` be tested — queue advance, resume writes,
+//! Two jobs. It lets `setbuddy-core` be tested — queue advance, resume writes,
 //! engine selection — with no mpv, no audio device, and no sleeping: time only
 //! moves when a test calls [`NullEngine::tick`]. And it is the Rust twin of the
 //! throwaway Swift `NullEngine` used in M2 to prove the foreign-trait direction

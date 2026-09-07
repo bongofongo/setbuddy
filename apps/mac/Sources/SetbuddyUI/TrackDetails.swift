@@ -1,5 +1,5 @@
 import SwiftUI
-import SetwaveCore
+import SetbuddyCore
 
 /// Everything known about a track, with its artwork: the indexed fields, the
 /// file on disk, and — fetched on open — what `ffprobe` says about the

@@ -4,9 +4,9 @@
 #   scripts/build-swift-bindings.sh [debug|release]
 #
 # Produces, in apps/mac/Generated/:
-#   setwave.swift         the Swift API
-#   setwaveFFI.h          the C header
-#   setwaveFFI.modulemap  the module map
+#   setbuddy.swift         the Swift API
+#   setbuddyFFI.h          the C header
+#   setbuddyFFI.modulemap  the module map
 # and copies the dylib next to them.
 set -euo pipefail
 
@@ -20,14 +20,14 @@ case "$PROFILE" in
   *) echo "usage: $0 [debug|release]" >&2; exit 1 ;;
 esac
 
-LIB="$ROOT/target/$PROFILE/libsetwave_ffi.dylib"
+LIB="$ROOT/target/$PROFILE/libsetbuddy_ffi.dylib"
 
-echo "==> building setwave-ffi ($PROFILE)"
-cargo build -p setwave-ffi "${CARGO_FLAGS[@]}"
+echo "==> building setbuddy-ffi ($PROFILE)"
+cargo build -p setbuddy-ffi "${CARGO_FLAGS[@]}"
 
 echo "==> generating Swift bindings"
 mkdir -p "$OUT"
-cargo run -q -p setwave-ffi --bin uniffi-bindgen "${CARGO_FLAGS[@]}" -- \
+cargo run -q -p setbuddy-ffi --bin uniffi-bindgen "${CARGO_FLAGS[@]}" -- \
     generate --library "$LIB" --language swift --out-dir "$OUT"
 
 cp "$LIB" "$OUT/"

@@ -864,18 +864,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "setwave-cli"
+name = "setbuddy-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "setwave-core",
- "setwave-engine",
- "setwave-mpv",
+ "setbuddy-core",
+ "setbuddy-engine",
+ "setbuddy-mpv",
 ]
 
 [[package]]
-name = "setwave-core"
+name = "setbuddy-core"
 version = "0.1.0"
 dependencies = [
  "dirs",
@@ -884,36 +884,36 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
- "setwave-engine",
+ "setbuddy-engine",
  "thiserror 1.0.69",
  "walkdir",
 ]
 
 [[package]]
-name = "setwave-engine"
+name = "setbuddy-engine"
 version = "0.1.0"
 dependencies = [
  "thiserror 1.0.69",
 ]
 
 [[package]]
-name = "setwave-ffi"
+name = "setbuddy-ffi"
 version = "0.1.0"
 dependencies = [
- "setwave-core",
- "setwave-engine",
- "setwave-mpv",
+ "setbuddy-core",
+ "setbuddy-engine",
+ "setbuddy-mpv",
  "thiserror 1.0.69",
  "uniffi",
 ]
 
 [[package]]
-name = "setwave-mpv"
+name = "setbuddy-mpv"
 version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "setwave-engine",
+ "setbuddy-engine",
  "thiserror 1.0.69",
 ]
 

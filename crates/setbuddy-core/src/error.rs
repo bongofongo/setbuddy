@@ -1,4 +1,4 @@
-use setwave_engine::EngineError;
+use setbuddy_engine::EngineError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
@@ -14,7 +14,7 @@ pub enum CoreError {
     #[error("nothing in the library matches \"{query}\"")]
     NoMatch { query: String },
 
-    #[error("{path} is not a media file Setwave recognises")]
+    #[error("{path} is not a media file Setbuddy recognises")]
     NotMedia { path: String },
 
     #[error("nothing is playing")]

@@ -7,11 +7,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use setwave_core::player::Player;
-use setwave_core::queue::RepeatMode;
-use setwave_core::selection::EngineRegistry;
-use setwave_core::store::Store;
-use setwave_engine::null::NullEngine;
+use setbuddy_core::player::Player;
+use setbuddy_core::queue::RepeatMode;
+use setbuddy_core::selection::EngineRegistry;
+use setbuddy_core::store::Store;
+use setbuddy_engine::null::NullEngine;
 
 struct Fixture {
     player: Player,
@@ -23,13 +23,14 @@ struct Fixture {
 /// A scratch directory of empty media files. They are never decoded — the
 /// engine is a stub — but they must exist for indexing to canonicalise them.
 fn fixture(files: &[&str], duration: Option<f64>) -> Fixture {
+    // A counter, not just a clock: tests run in parallel threads and two
+    // fixtures built in the same nanosecond would share a directory, so the
+    // first one dropped would delete the other's files out from under it.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir = std::env::temp_dir().join(format!(
-        "setwave-core-test-{}-{}",
+        "setbuddy-core-test-{}-{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::create_dir_all(&dir).unwrap();
     for name in files {
@@ -370,10 +371,165 @@ fn unsupported_files_are_rejected_before_reaching_an_engine() {
     );
 }
 
+/// Scrubbing back to the top must not leave the old position to fire on the
+/// next play — the listener just told us where they want to start.
+#[test]
+fn scrubbing_back_inside_the_guard_band_discards_a_stale_resume() {
+    let f = fixture(&["set.webm"], Some(7200.0));
+    let track = f.player.play_path(&f.dir.join("set.webm")).unwrap();
+
+    f.engine.tick(3600.0);
+    f.player.tick().unwrap();
+    assert_eq!(f.store.resume_for(track.id).unwrap(), Some(3600.0));
+
+    f.player.seek_absolute(5.0).unwrap();
+    f.player.tick().unwrap();
+    assert_eq!(
+        f.store.resume_for(track.id).unwrap(),
+        None,
+        "an hour-old position must not survive a scrub to the start"
+    );
+}
+
+/// Pausing is a save point: a listener who pauses and walks away has told us
+/// where they are, and should not lose up to fifteen seconds of it.
+#[test]
+fn pausing_writes_the_position_immediately() {
+    let f = fixture(&["set.webm"], Some(7200.0));
+    let track = f.player.play_path(&f.dir.join("set.webm")).unwrap();
+
+    f.engine.tick(600.0);
+    assert_eq!(
+        f.store.resume_for(track.id).unwrap(),
+        None,
+        "nothing has driven the ticker yet"
+    );
+
+    f.player.set_paused(true).unwrap();
+    assert_eq!(f.store.resume_for(track.id).unwrap(), Some(600.0));
+}
+
+/// Between writes the position is left alone: waking the disk every tick for a
+/// two-hour set is what the interval exists to avoid.
+#[test]
+fn positions_are_written_no_more_often_than_the_interval() {
+    let f = fixture(&["set.webm"], Some(7200.0));
+    let track = f.player.play_path(&f.dir.join("set.webm")).unwrap();
+
+    f.engine.tick(600.0);
+    f.player.tick().unwrap();
+    assert_eq!(f.store.resume_for(track.id).unwrap(), Some(600.0));
+
+    f.engine
+        .tick(setbuddy_core::player::RESUME_WRITE_INTERVAL_SECS - 1.0);
+    f.player.tick().unwrap();
+    assert_eq!(
+        f.store.resume_for(track.id).unwrap(),
+        Some(600.0),
+        "too soon to write again"
+    );
+
+    f.engine.tick(2.0);
+    f.player.tick().unwrap();
+    assert_eq!(
+        f.store.resume_for(track.id).unwrap(),
+        Some(600.0 + setbuddy_core::player::RESUME_WRITE_INTERVAL_SECS + 1.0),
+        "past the interval, the new position lands"
+    );
+}
+
+/// A file with no duration still resumes — only the opening guard applies —
+/// and the duration learned on first play does not retroactively erase it.
+#[test]
+fn a_file_of_unknown_duration_still_resumes() {
+    let f = fixture(&["set.webm"], None);
+    let track = f.player.play_path(&f.dir.join("set.webm")).unwrap();
+
+    f.engine.tick(600.0);
+    f.player.tick().unwrap();
+    assert_eq!(f.store.resume_for(track.id).unwrap(), Some(600.0));
+
+    f.player.stop().unwrap();
+    f.player.play_track_id(track.id).unwrap();
+    let resumed = f
+        .engine
+        .calls()
+        .into_iter()
+        .filter(|c| c.starts_with("load("))
+        .next_back()
+        .unwrap();
+    assert!(resumed.contains("Some(600.0)"), "got {resumed}");
+}
+
+/// `stop` is not `quit`: the position is kept, the engine stays available, and
+/// the status goes quiet without claiming a track is still loaded.
+#[test]
+fn stopping_persists_the_position_and_reports_nothing_playing() {
+    let f = fixture(&["set.webm"], Some(7200.0));
+    let track = f.player.play_path(&f.dir.join("set.webm")).unwrap();
+
+    f.engine.tick(1800.0);
+    f.player.stop().unwrap();
+
+    assert_eq!(f.store.resume_for(track.id).unwrap(), Some(1800.0));
+    let status = f.player.status().unwrap();
+    assert!(status.idle);
+    assert!(status.track.is_none());
+    assert!(
+        !f.engine.was_shutdown(),
+        "stop does not shut the engine down"
+    );
+}
+
+/// Nothing playing is a normal state, not an error to be swallowed by a panic.
+#[test]
+fn transport_calls_with_nothing_playing_report_it_rather_than_panicking() {
+    let f = fixture(&["set.webm"], Some(600.0));
+    assert!(matches!(
+        f.player.set_paused(true),
+        Err(setbuddy_core::CoreError::NothingPlaying)
+    ));
+    assert!(matches!(
+        f.player.seek_absolute(30.0),
+        Err(setbuddy_core::CoreError::NothingPlaying)
+    ));
+    assert!(matches!(
+        f.player.toggle_video(),
+        Err(setbuddy_core::CoreError::NothingPlaying)
+    ));
+    // Upkeep with nothing loaded is a no-op, not a failure.
+    f.player.tick().unwrap();
+    f.player.persist_resume().unwrap();
+    assert!(f.engine.calls().is_empty());
+}
+
 #[test]
 fn quitting_shuts_the_engine_down() {
     let f = fixture(&["a.mp3"], Some(600.0));
     f.player.play_path(&f.dir.join("a.mp3")).unwrap();
     f.player.quit().unwrap();
     assert!(f.engine.was_shutdown());
+}
+
+/// The app's choice of where video appears is a setting like any other: core
+/// keeps it, core never acts on it.
+#[test]
+fn the_video_surface_choice_survives_a_new_player_over_the_same_store() {
+    let f = fixture(&["set.webm"], None);
+    assert_eq!(
+        f.player.video_surface().unwrap(),
+        None,
+        "nothing chosen yet"
+    );
+
+    f.player.set_video_surface("panel").unwrap();
+    assert_eq!(f.player.video_surface().unwrap().as_deref(), Some("panel"));
+
+    let engine = Arc::new(NullEngine::new());
+    let reopened = Player::new(f.store.clone(), EngineRegistry::new(vec![engine])).unwrap();
+    assert_eq!(
+        reopened.video_surface().unwrap().as_deref(),
+        Some("panel"),
+        "the choice is remembered across launches"
+    );
 }

@@ -1,34 +1,33 @@
-//! Swift bindings for Setwave.
+//! Swift bindings for Setbuddy.
 //!
-//! All UniFFI concerns live here and nowhere else. `setwave-core` and
-//! `setwave-engine` stay free of bindings machinery, so the FFI surface can be
+//! All UniFFI concerns live here and nowhere else. `setbuddy-core` and
+//! `setbuddy-engine` stay free of bindings machinery, so the FFI surface can be
 //! reshaped without touching the domain — and, more to the point, so the
 //! engine contract stays a plain Rust trait that any backend can satisfy.
 //!
 //! ## The v2 escape hatch
 //!
-//! [`PlaybackEngine`] here mirrors [`setwave_engine::PlaybackEngine`] but is
+//! [`PlaybackEngine`] here mirrors [`setbuddy_engine::PlaybackEngine`] but is
 //! exported `with_foreign`, meaning **Swift can implement it**. A Swift
-//! AVFoundation engine passed to [`Setwave::with_engines`] is wrapped by
+//! AVFoundation engine passed to [`Setbuddy::with_engines`] is wrapped by
 //! `ForeignEngine` and registered ahead of mpv, at which point engine selection
 //! routes `.mp3` and `.mp4` to it and `.webm` to mpv, with no change anywhere
 //! else. That direction is exercised now, in `tests/swift`, rather than being
 //! discovered to be impossible in v2.
 
-uniffi::setup_scaffolding!("setwave");
+uniffi::setup_scaffolding!("setbuddy");
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use setwave_core::library::scan_all;
-use setwave_core::paths;
-use setwave_core::player::Player;
-use setwave_core::queue::RepeatMode as CoreRepeatMode;
-use setwave_core::selection::{EnginePolicy, EngineRegistry};
-use setwave_core::store::Store;
-use setwave_core::track::Track as CoreTrack;
-use setwave_engine::SharedEngine;
-use setwave_mpv::MpvEngine;
+use setbuddy_core::paths;
+use setbuddy_core::player::Player;
+use setbuddy_core::queue::RepeatMode as CoreRepeatMode;
+use setbuddy_core::selection::{EnginePolicy, EngineRegistry};
+use setbuddy_core::store::Store;
+use setbuddy_core::track::Track as CoreTrack;
+use setbuddy_engine::SharedEngine;
+use setbuddy_mpv::MpvEngine;
 
 // ---------------------------------------------------------------------------
 // Types crossing the boundary
@@ -140,7 +139,7 @@ pub struct ScanReport {
 }
 
 #[derive(Debug, thiserror::Error, uniffi::Error)]
-pub enum SetwaveError {
+pub enum SetbuddyError {
     /// The backend is not installed. `hint` is user-facing copy for the
     /// onboarding sheet — for mpv, "Install it with `brew install mpv`".
     #[error("{display_name} is not installed. {hint}")]
@@ -149,7 +148,7 @@ pub enum SetwaveError {
     #[error("nothing is playing")]
     NothingPlaying,
 
-    #[error("{path} is not a media file Setwave recognises")]
+    #[error("{path} is not a media file Setbuddy recognises")]
     UnsupportedFile { path: String },
 
     #[error("nothing matches \"{query}\"")]
@@ -162,38 +161,38 @@ pub enum SetwaveError {
     Storage { message: String },
 }
 
-impl From<setwave_engine::EngineError> for SetwaveError {
-    fn from(error: setwave_engine::EngineError) -> Self {
-        use setwave_engine::EngineError as E;
+impl From<setbuddy_engine::EngineError> for SetbuddyError {
+    fn from(error: setbuddy_engine::EngineError) -> Self {
+        use setbuddy_engine::EngineError as E;
         match error {
             E::EngineMissing { display_name, hint } => {
-                SetwaveError::EngineMissing { display_name, hint }
+                SetbuddyError::EngineMissing { display_name, hint }
             }
-            E::Unsupported { path } => SetwaveError::UnsupportedFile { path },
-            other => SetwaveError::Playback {
+            E::Unsupported { path } => SetbuddyError::UnsupportedFile { path },
+            other => SetbuddyError::Playback {
                 message: other.to_string(),
             },
         }
     }
 }
 
-impl From<setwave_core::CoreError> for SetwaveError {
-    fn from(error: setwave_core::CoreError) -> Self {
-        use setwave_core::CoreError as E;
+impl From<setbuddy_core::CoreError> for SetbuddyError {
+    fn from(error: setbuddy_core::CoreError) -> Self {
+        use setbuddy_core::CoreError as E;
         match error {
             E::Engine(engine) => engine.into(),
-            E::NothingPlaying => SetwaveError::NothingPlaying,
-            E::NotMedia { path } => SetwaveError::UnsupportedFile { path },
-            E::NoMatch { query } => SetwaveError::NoMatch { query },
-            E::Storage { message } => SetwaveError::Storage { message },
-            other => SetwaveError::Playback {
+            E::NothingPlaying => SetbuddyError::NothingPlaying,
+            E::NotMedia { path } => SetbuddyError::UnsupportedFile { path },
+            E::NoMatch { query } => SetbuddyError::NoMatch { query },
+            E::Storage { message } => SetbuddyError::Storage { message },
+            other => SetbuddyError::Playback {
                 message: other.to_string(),
             },
         }
     }
 }
 
-type Result<T> = std::result::Result<T, SetwaveError>;
+type Result<T> = std::result::Result<T, SetbuddyError>;
 
 // ---------------------------------------------------------------------------
 // Foreign engines
@@ -201,7 +200,7 @@ type Result<T> = std::result::Result<T, SetwaveError>;
 
 /// The engine contract, implementable from Swift.
 ///
-/// Mirrors [`setwave_engine::PlaybackEngine`]. An implementation written in
+/// Mirrors [`setbuddy_engine::PlaybackEngine`]. An implementation written in
 /// Swift — AVFoundation in v2 — is adapted back to that trait by
 /// `ForeignEngine`, so core cannot tell the difference between it and mpv.
 #[uniffi::export(with_foreign)]
@@ -215,6 +214,14 @@ pub trait PlaybackEngine: Send + Sync {
     /// Show or hide the video surface without interrupting audio.
     fn set_video_visible(&self, visible: bool) -> Result<()>;
     fn set_video_ontop(&self, ontop: bool) -> Result<()>;
+    /// Where and how large the video window is when it next appears, in the
+    /// settings form: `"40%"`, `"fill"`, `"fullscreen"`, `"1280"`,
+    /// `"1280+100+50"`, `"1280+100+50/1"`.
+    ///
+    /// A string rather than the Rust enum, because that same string is what
+    /// crosses the boundary in `Setbuddy::set_video_window_layout` and what the
+    /// store holds; one grammar, parsed at each edge, beats two.
+    fn set_video_window_layout(&self, spec: String) -> Result<()>;
     fn stop(&self) -> Result<()>;
     fn snapshot(&self) -> EngineSnapshot;
     fn shutdown(&self);
@@ -225,22 +232,24 @@ struct ForeignEngine(Arc<dyn PlaybackEngine>);
 
 /// Foreign errors carry no structure back across the boundary beyond their
 /// variant, so preserve the one the UI acts on and flatten the rest.
-fn to_engine_error(error: SetwaveError) -> setwave_engine::EngineError {
+fn to_engine_error(error: SetbuddyError) -> setbuddy_engine::EngineError {
     match error {
-        SetwaveError::EngineMissing { display_name, hint } => {
-            setwave_engine::EngineError::EngineMissing { display_name, hint }
+        SetbuddyError::EngineMissing { display_name, hint } => {
+            setbuddy_engine::EngineError::EngineMissing { display_name, hint }
         }
-        SetwaveError::UnsupportedFile { path } => setwave_engine::EngineError::Unsupported { path },
-        other => setwave_engine::EngineError::Internal {
+        SetbuddyError::UnsupportedFile { path } => {
+            setbuddy_engine::EngineError::Unsupported { path }
+        }
+        other => setbuddy_engine::EngineError::Internal {
             message: other.to_string(),
         },
     }
 }
 
-impl setwave_engine::PlaybackEngine for ForeignEngine {
-    fn capabilities(&self) -> setwave_engine::EngineCapabilities {
+impl setbuddy_engine::PlaybackEngine for ForeignEngine {
+    fn capabilities(&self) -> setbuddy_engine::EngineCapabilities {
         let caps = self.0.capabilities();
-        setwave_engine::EngineCapabilities {
+        setbuddy_engine::EngineCapabilities {
             id: caps.id,
             display_name: caps.display_name,
             containers: caps.containers,
@@ -254,44 +263,63 @@ impl setwave_engine::PlaybackEngine for ForeignEngine {
         &self,
         path: String,
         start_at: Option<f64>,
-    ) -> std::result::Result<(), setwave_engine::EngineError> {
+    ) -> std::result::Result<(), setbuddy_engine::EngineError> {
         self.0.load(path, start_at).map_err(to_engine_error)
     }
 
-    fn set_paused(&self, paused: bool) -> std::result::Result<(), setwave_engine::EngineError> {
+    fn set_paused(&self, paused: bool) -> std::result::Result<(), setbuddy_engine::EngineError> {
         self.0.set_paused(paused).map_err(to_engine_error)
     }
 
-    fn seek_absolute(&self, seconds: f64) -> std::result::Result<(), setwave_engine::EngineError> {
+    fn seek_absolute(&self, seconds: f64) -> std::result::Result<(), setbuddy_engine::EngineError> {
         self.0.seek_absolute(seconds).map_err(to_engine_error)
     }
 
-    fn set_volume(&self, percent: f64) -> std::result::Result<(), setwave_engine::EngineError> {
+    fn set_volume(&self, percent: f64) -> std::result::Result<(), setbuddy_engine::EngineError> {
         self.0.set_volume(percent).map_err(to_engine_error)
     }
 
-    fn set_speed(&self, rate: f64) -> std::result::Result<(), setwave_engine::EngineError> {
+    fn set_speed(&self, rate: f64) -> std::result::Result<(), setbuddy_engine::EngineError> {
         self.0.set_speed(rate).map_err(to_engine_error)
     }
 
     fn set_video_visible(
         &self,
         visible: bool,
-    ) -> std::result::Result<(), setwave_engine::EngineError> {
+    ) -> std::result::Result<(), setbuddy_engine::EngineError> {
         self.0.set_video_visible(visible).map_err(to_engine_error)
     }
 
-    fn set_video_ontop(&self, ontop: bool) -> std::result::Result<(), setwave_engine::EngineError> {
+    fn set_video_ontop(
+        &self,
+        ontop: bool,
+    ) -> std::result::Result<(), setbuddy_engine::EngineError> {
         self.0.set_video_ontop(ontop).map_err(to_engine_error)
     }
 
-    fn stop(&self) -> std::result::Result<(), setwave_engine::EngineError> {
+    fn set_video_window_layout(
+        &self,
+        layout: setbuddy_engine::VideoWindowLayout,
+    ) -> std::result::Result<(), setbuddy_engine::EngineError> {
+        self.0
+            .set_video_window_layout(layout.as_str())
+            .map_err(to_engine_error)
+    }
+
+    // `begin_window_placement` is deliberately left at its default `None`: the
+    // host reads a placed window's bounds back *by owning pid*, and a foreign
+    // engine's window belongs to the app's own process, where the placement
+    // overlay's full-screen dimmers would be picked up instead. Placement runs
+    // on an engine with its own process; the layout it produces is applied to
+    // every engine, so the foreign one still lands where the user put it.
+
+    fn stop(&self) -> std::result::Result<(), setbuddy_engine::EngineError> {
         self.0.stop().map_err(to_engine_error)
     }
 
-    fn snapshot(&self) -> setwave_engine::EngineSnapshot {
+    fn snapshot(&self) -> setbuddy_engine::EngineSnapshot {
         let snap = self.0.snapshot();
-        setwave_engine::EngineSnapshot {
+        setbuddy_engine::EngineSnapshot {
             position_secs: snap.position_secs,
             duration_secs: snap.duration_secs,
             paused: snap.paused,
@@ -324,7 +352,7 @@ struct Ticker {
 }
 
 #[derive(uniffi::Object)]
-pub struct Setwave {
+pub struct Setbuddy {
     player: Arc<Player>,
     store: Arc<Store>,
     observers: Arc<Mutex<Vec<Arc<dyn PlayerObserver>>>>,
@@ -332,7 +360,7 @@ pub struct Setwave {
 }
 
 #[uniffi::export]
-impl Setwave {
+impl Setbuddy {
     /// Build with mpv as the only engine.
     #[uniffi::constructor]
     pub fn new() -> Result<Arc<Self>> {
@@ -427,8 +455,8 @@ impl Setwave {
     /// `"fullscreen"`, a pixel width like `"1280"`, or a width, top-left
     /// corner and screen like `"1280+100+50/0"`. Persisted.
     pub fn set_video_window_layout(&self, spec: String) -> Result<()> {
-        let layout = setwave_engine::VideoWindowLayout::parse(&spec).ok_or_else(|| {
-            SetwaveError::Playback {
+        let layout = setbuddy_engine::VideoWindowLayout::parse(&spec).ok_or_else(|| {
+            SetbuddyError::Playback {
                 message: format!(
                     "\"{spec}\" is not a window layout; use a percentage like 40%, \"fill\", \
                      \"fullscreen\", a width like 1280, or width+x+y/screen like 1280+100+50/0"
@@ -447,6 +475,32 @@ impl Setwave {
 
     pub fn end_window_placement(&self) -> Result<()> {
         Ok(self.player.end_window_placement()?)
+    }
+
+    /// Where the picture goes when video is switched on: `"window"`, the
+    /// engine's own floating window, or `"panel"`, a surface the app draws
+    /// inside its own UI. Defaults to `"window"`.
+    ///
+    /// Whether `"panel"` can be honoured is not core's to answer — it depends
+    /// on the engine playing the file being one the app holds in its own
+    /// process. The app asks its engine; this only remembers the preference.
+    pub fn video_surface(&self) -> Result<String> {
+        Ok(self
+            .player
+            .video_surface()?
+            .unwrap_or_else(|| "window".into()))
+    }
+
+    pub fn set_video_surface(&self, surface: String) -> Result<()> {
+        let surface = surface.trim().to_ascii_lowercase();
+        if surface != "window" && surface != "panel" {
+            return Err(SetbuddyError::Playback {
+                message: format!(
+                    "\"{surface}\" is not a video surface; use \"window\" or \"panel\""
+                ),
+            });
+        }
+        Ok(self.player.set_video_surface(&surface)?)
     }
 
     /// The saved pop-out layout in the same form, or the engines' default.
@@ -571,7 +625,7 @@ impl Setwave {
         let Some(track) = self.store.track_by_id(track_id)? else {
             return Ok(None);
         };
-        Ok(setwave_core::artwork::artwork_for(&track)
+        Ok(setbuddy_core::artwork::artwork_for(&track)
             .map(|path| path.to_string_lossy().into_owned()))
     }
 
@@ -583,7 +637,7 @@ impl Setwave {
             return Ok(Vec::new());
         };
         Ok(
-            setwave_core::probe::details(std::path::Path::new(&track.path))
+            setbuddy_core::probe::details(std::path::Path::new(&track.path))
                 .into_iter()
                 .map(|(label, value)| MetadataEntry { label, value })
                 .collect(),
@@ -604,7 +658,7 @@ impl Setwave {
 
     /// Rescan every watched folder. Long-running; call off the main thread.
     pub fn scan(&self) -> Result<ScanReport> {
-        let report = scan_all(&self.store)?;
+        let report = self.player.rescan_library()?;
         Ok(ScanReport {
             seen: report.seen as u32,
             added: report.added as u32,
@@ -612,6 +666,28 @@ impl Setwave {
             unchanged: report.unchanged as u32,
             removed: report.removed as u32,
         })
+    }
+
+    /// The engine policy in force: `"auto"` or an engine id. Read back so the
+    /// settings UI shows what is actually set rather than a guess.
+    pub fn engine_policy(&self) -> String {
+        self.player.engine_policy().as_str()
+    }
+
+    /// What each registered engine can do, in preference order.
+    pub fn engines(&self) -> Vec<EngineCapabilities> {
+        self.player
+            .engine_capabilities()
+            .into_iter()
+            .map(|caps| EngineCapabilities {
+                id: caps.id,
+                display_name: caps.display_name,
+                containers: caps.containers,
+                video: caps.video,
+                ontop_window: caps.ontop_window,
+                native_pip: caps.native_pip,
+            })
+            .collect()
     }
 
     pub fn set_engine_policy(&self, policy: String) -> Result<()> {
@@ -651,7 +727,7 @@ impl Setwave {
         let interval = std::time::Duration::from_millis(interval_ms.max(50));
 
         let handle = std::thread::Builder::new()
-            .name("setwave-ticker".into())
+            .name("setbuddy-ticker".into())
             .spawn(move || {
                 while flag.load(Ordering::Relaxed) {
                     let _ = player.tick();
@@ -685,9 +761,13 @@ impl Setwave {
     }
 }
 
-impl Setwave {
+impl Setbuddy {
     fn build(foreign: Vec<Arc<dyn PlaybackEngine>>) -> Result<Arc<Self>> {
-        paths::ensure_state_dir().map_err(|e| SetwaveError::Storage {
+        // Before any engine is looked for and before the ticker thread exists:
+        // launched from Finder, this process has only the system directories on
+        // PATH and would find none of the tools it shells out to.
+        paths::ensure_tool_path();
+        paths::ensure_state_dir().map_err(|e| SetbuddyError::Storage {
             message: e.to_string(),
         })?;
         let store = Arc::new(Store::open(&paths::database_path())?);
@@ -697,10 +777,21 @@ impl Setwave {
             .into_iter()
             .map(|e| Arc::new(ForeignEngine(e)) as SharedEngine)
             .collect();
-        engines.push(Arc::new(MpvEngine::shared(paths::engine_socket_path())?));
+        // mpv is the catch-all, not a requirement. A front end that brought
+        // its own engine keeps working on a machine with no mpv installed —
+        // it just cannot open the containers only mpv reads, which selection
+        // already reports as unsupported. With no engine at all there is
+        // nothing to build, so the missing-engine error stands.
+        match MpvEngine::shared(paths::engine_socket_path()) {
+            Ok(mpv) => engines.push(Arc::new(mpv)),
+            Err(missing) if !engines.is_empty() => {
+                log_engine_unavailable(&missing);
+            }
+            Err(missing) => return Err(missing.into()),
+        }
 
         let player = Arc::new(Player::new(store.clone(), EngineRegistry::new(engines))?);
-        Ok(Arc::new(Setwave {
+        Ok(Arc::new(Setbuddy {
             player,
             store,
             observers: Arc::new(Mutex::new(Vec::new())),
@@ -717,7 +808,7 @@ impl Setwave {
     }
 }
 
-impl Drop for Setwave {
+impl Drop for Setbuddy {
     fn drop(&mut self) {
         // Never leave the ticker thread running with a dangling player.
         self.stop_ticker();
@@ -732,7 +823,7 @@ fn track_to_ffi(store: &Store, track: CoreTrack) -> Track {
         .resume_for(track.id)
         .ok()
         .flatten()
-        .and_then(|stored| setwave_core::resume::start_at(Some(stored), track.duration_secs));
+        .and_then(|stored| setbuddy_core::resume::start_at(Some(stored), track.duration_secs));
     Track {
         id: track.id,
         path: track.path,
@@ -769,17 +860,26 @@ fn snapshot_of(player: &Player, store: &Store) -> Result<PlayerSnapshot> {
     })
 }
 
+/// An engine that could not be registered. Not an error for the caller: the
+/// others carry on without it.
+fn log_engine_unavailable(error: &setbuddy_engine::EngineError) {
+    eprintln!("setbuddy: playback engine unavailable, continuing without it: {error}");
+}
+
 /// Whether mpv is on `PATH`.
 ///
-/// Call before [`Setwave::new`] to show the onboarding sheet without
+/// Call before [`Setbuddy::new`] to show the onboarding sheet without
 /// constructing anything.
 #[uniffi::export]
 pub fn mpv_available() -> bool {
+    // Reached before the constructor — the onboarding sheet is what it decides —
+    // so it fixes PATH itself rather than relying on having been built first.
+    paths::ensure_tool_path();
     MpvEngine::is_available()
 }
 
 /// Seconds as `H:MM:SS` or `M:SS`, so Swift renders times identically to the CLI.
 #[uniffi::export]
 pub fn format_duration(seconds: f64) -> String {
-    setwave_core::format_duration(seconds)
+    setbuddy_core::format_duration(seconds)
 }

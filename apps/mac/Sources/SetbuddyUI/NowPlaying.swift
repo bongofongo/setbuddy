@@ -1,10 +1,10 @@
 import AppKit
 import MediaPlayer
-import SetwaveCore
+import SetbuddyCore
 
 /// Owns the system Now Playing widget and the media keys.
 ///
-/// Setwave can own these only because the engine gives them up: mpv is spawned
+/// Setbuddy can own these only because the engine gives them up: mpv is spawned
 /// with `--media-controls=no` and `--input-media-keys=no`, so it neither claims
 /// the Control Center widget nor eats F7/F8/F9. Without that, both processes
 /// would answer every key press and each one would toggle twice.

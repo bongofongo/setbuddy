@@ -37,7 +37,17 @@ impl ScanReport {
 ///
 /// Unchanged files cost a `stat` and an indexed lookup — no probing — so
 /// rescanning a folder of two-hour sets is fast enough to do on every launch.
+///
+/// The root is canonicalised first. A path is a track's identity here, so the
+/// same file reached through a symlinked parent — `/tmp` and `/private/tmp` on
+/// macOS, `/home` behind an automounter — would otherwise be indexed twice,
+/// with two rows, two thumbnails and two independent resume positions.
+/// Everything else that indexes a file canonicalises; this must agree.
+/// A root that cannot be canonicalised (unmounted, deleted) is walked as
+/// given, which finds nothing and reports an empty scan rather than failing.
 pub fn scan_folder(store: &Store, root: &Path) -> Result<ScanReport> {
+    let canonical = root.canonicalize();
+    let root: &Path = canonical.as_deref().unwrap_or(root);
     let mut report = ScanReport::default();
     for entry in WalkDir::new(root)
         .follow_links(false)

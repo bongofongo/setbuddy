@@ -68,7 +68,7 @@ enum WindowPlacement {
 /// bar level (under mpv, over everything else) and the HUD sits well above
 /// mpv, so it stays clickable even when the set window is dragged over it.
 ///
-/// Setwave's own panel and popover are hidden on the way in: a menu bar panel
+/// Setbuddy's own panel and popover are hidden on the way in: a menu bar panel
 /// closes the moment the user clicks the window they are placing anyway, and
 /// leaving it half-open behind the dimming only confuses.
 @MainActor
@@ -81,7 +81,7 @@ final class PlacementOverlay {
     init(pid: pid_t, onSave: @escaping () -> Void, onCancel: @escaping () -> Void) {
         session = PlacementSession(pid: pid, onSave: onSave, onCancel: onCancel)
 
-        // Everything Setwave has up is the menu bar panel and its popover.
+        // Everything Setbuddy has up is the menu bar panel and its popover.
         for window in NSApp.windows where window.isVisible {
             window.orderOut(nil)
         }
